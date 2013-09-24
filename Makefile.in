@@ -84,3 +84,9 @@ clean:
 	$(RM) tclftdi${SHDLIB_EXT}
 	$(RM) $(WRAPPER_INIT)
 	$(RM) $(WRAPPER_SH)
+
+veryclean:
+	$(RM) ${FTDI_OBJS}
+	$(RM) tclftdi${SHDLIB_EXT}
+	$(RM) $(WRAPPER_INIT)
+	$(RM) $(WRAPPER_SH)
