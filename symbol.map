@@ -1,0 +1,4 @@
+TCLFTDI_1.0 {
+   global: Tclftdi_Init;
+   local: *;
+};

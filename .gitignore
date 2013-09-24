@@ -1,0 +1,10 @@
+tclftdi
+config.cache
+config.status
+config.log
+Makefile
+*.o
+*.so
+*~
+UPDATE_ME
+VERSION

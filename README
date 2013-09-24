@@ -1,0 +1,105 @@
+Version 1.0:  Basic FTDI MPSSE SPI capability
+Written by Tim Edwards
+Open Circuit Design
+
+--------------------------------------------------------------------------------
+
+Compile by doing:
+
+   make
+
+Run by doing:
+
+   tclftdi [<scriptfile>]
+
+If <scriptfile> is not specified, then the program will generate a console
+window into which ftdi commands can be given:
+
+   set device [opendev]
+   spi_read $device 0 2
+
+If <scriptfile> is specified, it is normally the name of a chip or project
+and will generate a GUI window specific to that project.
+
+--------------------------------------------------------------------------------
+
+Tcl Package name:
+
+   ftdi
+
+Package Tcl commands:
+
+   ftdi::opendev [-invert] [<description_string>]
+
+	Open the device named <description_string>, and return the device
+	name that will be used for accessing the device with other commands.
+	The <description_string> is programmed into the device EEPROM, or
+	by default is one of "Dual RS232-HS A" or "Dual RS232-HS B" (for
+	the FTDI device FT2232).
+
+	If "-invert" is used, then the chip select pin is negative sense
+	(i.e., CSB);  otherwise, it is positive sense (CS).
+
+   ftdi::listdev
+
+	List the description string of all open devices.
+
+   ftdi::get <devicename>
+
+	Read the 8-bit value of the general-purpose I/O bus
+
+   ftdi::spi_speed <devicename> <value>
+
+	Set the speed of the interface (rate of SCK) to <value> (in MHz).
+	Maximum value is 30MHz.
+
+   ftdi::spi_read <devicename> <register> <num_bytes>
+
+	Read SPI register <register>, which is <num_bytes> in length.
+	Protocol is determined by whether device was opened in -mps_mode
+	or not.
+
+   ftdi::spi_write <devicename> <register> {<byte_list>...}
+
+	Write list of bytes <byte_list>... to register <register>.  The
+	length of the byte list should match the expected number of bytes
+	in the register.
+
+   ftdi::closedev <devicename>
+
+	Close the communication channel to the FTDI device <devicename>.
+
+---------------------------------------------------------
+Errata:
+---------------------------------------------------------
+
+1. Device will not re-open after closing without unplugging
+   and re-plugging the USB cable.
+
+2. Application must be run as user root (see below).
+
+3. This program, as written, will not be able to open an FTDI device in
+   MPSSE mode as long as the "ftdi_sio" module is running.  To avoid this,
+   do (as root) "rmmod ftdi_sio" before running this program.  Generally,
+   this can be avoided by reprogramming the FTDI device to have a unique
+   vendor/product ID that will not be known to the system, which will then
+   not attempt to attach the device to a device driver.
+
+---------------------------------------------------------
+To Do:
+---------------------------------------------------------
+
+1. "listdev" should query and report all devices whether or not they are open.
+
+2. "get" should return the 16-bit value for both Cbus and Dbus.
+
+3. There should be "set" and "config" commands to set the direction of the
+   Cbus and Dbus pins, making this a more general digital I/O interface
+   controller.
+
+4. This whole driver should be rewritten so that the low-level functions
+   accessing the D2XX library are part of a kernel-level driver, with the
+   user-level driver communicating with the kernel via the usual read(), 
+   write(), open(), close(), and ioctl() calls.  Together with a properly
+   programmed EEPROM, this will allow the device to be accessed by normal
+   users.

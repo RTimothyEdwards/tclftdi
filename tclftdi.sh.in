@@ -1,0 +1,14 @@
+#!/bin/sh
+#
+# This script starts tclftdi under the Tcl interpreter using tkcon.
+#
+
+loclibdir=${TCLFTDI_LIB_DIR:=TCLFTDILIBDIR}
+export TCLFTDI_LIB_DIR
+FTDI_WISH=WISH_EXE
+export FTDI_WISH
+
+exec ${loclibdir}/CONSOLE \
+	-eval "source ${loclibdir}/CONSOLE_SCRIPT" \
+        -slave "package require Tk; set argc $#; set argv [list $*]; \
+        source ${loclibdir}/WRAPPER_INIT"

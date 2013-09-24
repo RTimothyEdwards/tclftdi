@@ -1,0 +1,109 @@
+# Wishrc startup for ToolScript (tclftdi)
+#
+# Loads the shared object (tclftdi.so) file into Tcl, then runs the
+# wrapper script to generate the GUI.
+namespace path {::tcl::mathop ::tcl::mathfunc}
+
+load TCLFTDILIBDIR/tclftdi.so
+package require Tclftdi
+
+# It is important to make sure no TclFtdi commands overlap with Tcl built-in
+# commands, because otherwise the namespace import will fail.
+
+proc pushnamespace { name } {
+
+   namespace eval ${name} {namespace path {::tcl::mathop ::tcl::mathfunc}}
+   set y [namespace eval ${name} info commands ::${name}::*]
+   set z [info commands]
+
+   foreach v $y {
+      regsub -all {\*} $v {\\*} i
+      set x [namespace tail $i]
+      if {[lsearch $z $x] < 0} { 
+	 namespace import $i                       
+      } else {
+	 puts "Warning: ${name} command '$x' use fully-qualified name '$v'"
+      }
+   }
+}
+
+proc popnamespace { name } {
+   set z [info commands]
+   set l [expr [string length ${name}] + 5]
+
+   while {[set v [lsearch $z ${name}_tcl_*]] >= 0} {
+      set y [lindex $z $v]
+      set w [string range $y $l end]
+      interp alias {} ::$w {}
+      rename ::$y ::$w
+      puts "Info: replacing ::$w with ::$y"
+   }
+   namespace forget ::${name}::*
+}
+
+set auto_noexec 1	;# don't EVER call UNIX commands w/o "shell" in front
+
+set FtdiConsole tkcon
+wm withdraw .
+
+# Allow commands in the ftdi namespace to be called from the toplevel namespace
+
+pushnamespace ftdi
+
+if {[string range [wm title .] 0 3] == "wish"} {
+   wm withdraw .
+}
+
+#----------------------------------
+# Convenience routines
+#----------------------------------
+
+# Convert a (decimal) number into a bit vector string.  If dir = 0 (default),
+# MSB is on the left.  if dir = 1, MSB is on the right.
+
+proc ftdi::bconvert {value bits {dir 0}} {
+   set str ""
+   for {set i 0} {$i < $bits} {incr i} {
+      if {$dir == 0} {
+         set str "[& $value 1]$str"
+      } else {
+         append str [& $value 1]
+      }
+      set value [>> $value 1]
+   }
+   return $str
+}
+
+# Convert a bit vector string into a decimal number.
+
+proc ftdi::ibconvert {str {dir 0}} {
+   set value 0
+   set bits [string length $str]
+   if {$dir == 1} {set str [string reverse $str]}
+   for {set i 0} {$i < $bits} {incr i} {
+      set value [+ [* $value 2] [string range $str $i $i]]
+   }
+   return $value
+}
+
+
+proc ftdi::lowerconsole {} {
+   ftdi::consoledown
+}
+
+#------------------------------------------------------------------------------
+# If an argument is given on the commandline, then it is a script to be sourced
+#------------------------------------------------------------------------------
+
+if {$argc >= 1} {
+   set froot [lindex $argv 0]
+   if {[catch {source $froot} errMsg1]} {
+      if {[catch {source ${froot}.tcl} errMsg2]} {
+	 puts stderr "Can't source script file \"$froot\""
+	 puts stderr $errMsg2
+	 puts stderr $errMsg1
+      }
+   }
+}
+
+puts stdout "Tclftdi version 1.0 (February 2012)"
