@@ -651,7 +651,7 @@ if test "x${FTDI_D2XX_DIR}" != "x" ; then
 	   fi
         done
       ;;
-      *-linux)
+      *-linux|i686-*)
 	for dir in \
 	   ${FTDI_D2XX_DIR} \
 	   ${FTDI_D2XX_DIR}/build \

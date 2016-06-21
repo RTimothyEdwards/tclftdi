@@ -24,12 +24,15 @@ typedef struct _FT_RECORD {
    FT_HANDLE ftHandle;
    char *description;
    unsigned char flags;
+   unsigned char wordwidth;	// For bit-bang mode
+   unsigned char sigpins[4];	// For bit-bang mode
 } FT_RECORD;
 
 /* Flag definitions */
 #define CS_INVERT   0x01
 #define MIXED_MODE  0x03	// Mixed mode has SDI and SDO on
 				// different SCK edges.
+#define BITBANG_MODE 0x4	// Set bit-bang mode
 
 Tcl_HashTable handletab;
 
@@ -74,6 +77,26 @@ find_handle(char *devstr, unsigned char *flagptr)
 }
 
 /*--------------------------------------------------------------*/
+/* Similar to the above, but returns the record			*/
+/*--------------------------------------------------------------*/
+
+FT_RECORD *
+find_record(char *devstr, FT_HANDLE *handleptr)
+{
+   Tcl_HashEntry *h;
+   FT_RECORD *ftRecordPtr;
+
+   h = Tcl_FindHashEntry(&handletab, devstr);
+   if (h != NULL) {
+      ftRecordPtr = (FT_RECORD *)Tcl_GetHashValue(h);
+      if (handleptr != NULL) *handleptr = ftRecordPtr->ftHandle;
+      return ftRecordPtr;
+   }
+   if (handleptr != NULL) *handleptr = NULL;
+   return (FT_RECORD *)NULL;
+}
+
+/*--------------------------------------------------------------*/
 /* Tcl function "ftdi_get"					*/
 /* Read status of byte values on device cbus			*/
 /*--------------------------------------------------------------*/
@@ -89,6 +112,7 @@ ftditcl_get(ClientData clientData,
 
    DWORD numWritten;
    DWORD numRead;
+   FT_RECORD *ftRecord;
    FT_HANDLE ftHandle;
    FT_STATUS ftStatus;
  
@@ -97,11 +121,12 @@ ftditcl_get(ClientData clientData,
      return TCL_ERROR;
    }
 
-   ftHandle = find_handle(Tcl_GetString(objv[1]), &flags);
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
    if (ftHandle == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "get:  No such device\n", NULL);
       return TCL_ERROR;
    }
+   else flags = ftRecord->flags;
 
    tbuffer[0] = 0x83;		// Read high byte (i.e., Cbus)
 
@@ -148,6 +173,471 @@ ftditcl_verbose(ClientData clientData,
 }
 
 /*--------------------------------------------------------------*/
+/* Tcl function "ftdi::spi_bitbang": Set or disable SPI bit-	*/
+/* bang mode.  If setting, optional arguments may specify the	*/
+/* order of pins.						*/
+/*--------------------------------------------------------------*/
+
+// Local indexes for bitbang signals
+#define BB_CSB 0
+#define BB_SDO 1
+#define BB_SDI 2
+#define BB_SCK 3
+
+int
+ftditcl_spi_bitbang(ClientData clientData,
+	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+{
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
+
+   DWORD numWritten;
+
+   int result, i, j, k;
+   unsigned char *values;
+   unsigned char *sigpins;
+   unsigned char tbuffer[1];
+   unsigned char flags;
+   unsigned char sigio, sigassn;
+   int len, bangmode;
+   char *sigchar;
+   Tcl_Obj *sigpair, *sigval;
+
+   if (objc != 3) {
+      Tcl_SetResult(interp, "spi_bitbang: Need device name and argument.\n", NULL);
+      return TCL_ERROR;
+   }
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftRecord == (FT_HANDLE)NULL) {
+      Tcl_SetResult(interp, "spi_bitbang:  No such device\n", NULL);
+      return TCL_ERROR;
+   }
+   flags = ftRecord->flags;
+   sigpins = &(ftRecord->sigpins[0]);
+
+   // NOTE:  locally, signals will be indexed according to definitions
+   // above for BB_CSB, BB_SDO, BB_SDI, BB_SCK
+
+   result = Tcl_ListObjLength(interp, objv[2], &len);
+   if (len == 1) {
+      result = Tcl_GetBooleanFromObj(interp, objv[2], &bangmode);
+      if (result != TCL_OK) return result;
+      if (bangmode) {
+	 /* Set default signals. */
+	 ftRecord->flags |= BITBANG_MODE;
+	 ftRecord->wordwidth = 8;
+	 sigpins[3] = 0x08;	// ADBUS3 = SCK
+	 sigpins[2] = 0x04;	// ADBUS2 = SDI
+	 sigpins[1] = 0x02;	// ADBUS1 = SDO
+	 sigpins[0] = 0x01;	// ADBUS0 = CSB
+	 sigio = 0x0d;		// 1 = output, 0 = input
+      }
+      else {
+	 // Turn off bit bang mode, return to MPSSE mode
+	 ftRecord->flags &= ~BITBANG_MODE;
+	 ftRecord->wordwidth = 0;
+	 Tcl_SetResult(interp, "spi_bitbang:  Unimplemented option. "
+		" Close and reopen device to reset mode.\n", NULL);
+	 return TCL_ERROR;
+      }
+   }
+   else if (len == 4) {
+      /* Declare SPI signals.  Each should be a list of length two */
+      ftRecord->flags |= BITBANG_MODE;
+      ftRecord->wordwidth = 8;
+      sigio = 0x00;
+      sigassn = 0x00;
+      for (i = 0; i < 4; i++) {
+         result = Tcl_ListObjIndex(interp, objv[2], i, &sigpair);
+	 result = Tcl_ListObjLength(interp, sigpair, &len);
+	 if (len != 2) {
+	    Tcl_SetResult(interp, "spi_bitbang:  List of signals must be in"
+			"form {signal, bit}. bit is 0 to 7\n", NULL);
+	    return TCL_ERROR;
+	 }
+	 result = Tcl_ListObjIndex(interp, sigpair, 0, &sigval);
+
+	 // Recast from i (order in argument list) to j (signal
+	 // canonical order, 0 = CSB, 1 = SDO, 2 = SDI, 3 = SCK
+
+	 if (!strcasecmp(Tcl_GetString(sigval), "CSB"))
+	    j = BB_CSB;
+	 else if (!strcasecmp(Tcl_GetString(sigval), "SDO"))
+	    j = BB_SDO;
+	 else if (!strcasecmp(Tcl_GetString(sigval), "SDI"))
+	    j = BB_SDI;
+	 else if (!strcasecmp(Tcl_GetString(sigval), "SCK"))
+	    j = BB_SCK;
+	 else {
+	    Tcl_SetResult(interp, "spi_bitbang:  Unknown signal name.  Must be "
+			"one of CSB, SDO, SDI, or SCK\n", NULL);
+	    return TCL_ERROR;
+	 }
+	 result = Tcl_ListObjIndex(interp, sigpair, 0, &sigval);
+	 result = Tcl_GetIntFromObj(interp, sigval, &k);
+	 sigpins[j] = 0x01 << k;  // Convert bit number to bit mask
+
+	 if (j != BB_SDO) sigio |= sigpins[j];
+	 sigassn |= sigpins[j];
+      }
+
+      // Check that all pins are assigned.  
+      j = 0;
+      for (i = 0; i < 8; i++) if (sigassn & (1 << i)) j++;
+      if (j != 4) {
+	 Tcl_SetResult(interp, "spi_bitbang:  Not all signals assigned.  Must "
+			"assign all of CSB, SDO, SDI, and SCK\n", NULL);
+	 return TCL_ERROR;
+      }
+   }
+   else {
+      Tcl_SetResult(interp, "spi_bitbang:  Options are on, off, or list "
+		"of signals.\n", NULL);
+      return TCL_ERROR;
+   }
+
+   // Reset the FTDI device
+   ftStatus = FT_ResetDevice(ftHandle);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while resetting device.\n", NULL);
+
+   // Set device to Synchronous bit-bang mode, with pins SCK, SDI, and CSB
+   // set to output, SDO to input.
+
+   ftStatus = FT_SetBitMode(ftHandle, (UCHAR)sigio, (UCHAR)0x04);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while setting bit mode.\n", NULL);
+
+   ftStatus = FT_Purge(ftHandle, FT_PURGE_RX | FT_PURGE_TX);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while purging device.\n", NULL);
+
+   // Set latency timer (in ms) (legacy case is 16; FT2232 minimum 1)
+   ftStatus = FT_SetLatencyTimer(ftHandle, 5);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while setting latency timer.\n", NULL);
+
+   // Set timeouts (in ms)
+   ftStatus = FT_SetTimeouts(ftHandle, 1000, 1000);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while setting timeouts.\n", NULL);
+
+   // Set default values CSB = 1, SDI = 0, SCK = 0, SDO = don't care
+   tbuffer[0] = sigpins[BB_CSB];
+
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)1, &numWritten);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while writing init data\n", NULL);
+    else if (numWritten != (DWORD)1)
+      Tcl_SetResult(interp, "Short write error\n", NULL);
+
+   // Return
+   return TCL_OK;
+}
+
+/*--------------------------------------------------------------*/
+/* Tcl function "ftdi::bitbang_word":  Set the word length of	*/
+/* the SPI in bit-bang mode, which can accomodate lengths other	*/
+/* than the default 8.						*/
+/*--------------------------------------------------------------*/
+
+int
+ftditcl_bang_word(ClientData clientData,
+	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+{
+   FT_RECORD *ftRecord;
+   unsigned char flags;
+   int wordwidth, result;
+
+   if (objc != 3) {
+      Tcl_SetResult(interp, "bitbang_word: Need handle and integer value.\n", NULL);
+      return TCL_ERROR;
+   }
+   ftRecord = find_record(Tcl_GetString(objv[1]), NULL);
+   if (ftRecord == (FT_RECORD *)NULL) {
+      Tcl_SetResult(interp, "bitbang_word:  No such device\n", NULL);
+      return TCL_ERROR;
+   }
+   else flags = ftRecord->flags;
+
+   if (!(flags & BITBANG_MODE)) {
+      Tcl_SetResult(interp, "bitbang_word: bit-bang mode must be set first.\n", NULL);
+      return TCL_ERROR;
+   }
+
+   result = Tcl_GetIntFromObj(interp, objv[2], &wordwidth);
+   if (result != TCL_OK) return result;
+
+   ftRecord->wordwidth = wordwidth;
+   return TCL_OK;
+}
+
+/*--------------------------------------------------------------*/
+/* Tcl function "ftdi::bitbang_select":				*/
+/* Assert (1) or deassert (0) chip select in bit bang mode.	*/
+/*--------------------------------------------------------------*/
+
+int
+ftditcl_bang_select(ClientData clientData,
+	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+{
+   int result;
+   int i, j, value, numWritten;
+   unsigned char wordwidth;
+   unsigned char flags, tbuffer;
+   unsigned char *sigpins;
+   Tcl_Obj *vector, *lobj;
+
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
+
+   if (objc != 4) {
+      Tcl_SetResult(interp, "bitbang_select: Need device name, "
+		"register, and vector of values.\n", NULL);
+      return TCL_ERROR;
+   }
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
+      Tcl_SetResult(interp, "bitbang_write:  No such device\n", NULL);
+      return TCL_ERROR;
+   }
+   flags = ftRecord->flags;
+   wordwidth = ftRecord->wordwidth;
+   sigpins = &(ftRecord->sigpins[0]);
+
+   // If we're not in bit-bang mode, just return
+
+   if (!(flags & BITBANG_MODE)) {
+      return TCL_OK;
+   }
+
+   // Only argument is true/false
+
+   result = Tcl_GetBooleanFromObj(interp, objv[2], &value);
+   if (result != TCL_OK) return result;
+
+   // Assert or deassert CSB
+   tbuffer = (unsigned char)(1 - value);
+
+   // SPI write using bit bang
+   ftStatus = FT_Write(ftHandle, &tbuffer, (DWORD)1, &numWritten);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while applying CSB.\n", NULL);
+   else if (numWritten != (DWORD)1)
+      Tcl_SetResult(interp, "bitbang select:  short write error.\n", NULL);
+
+   return TCL_OK;
+}
+
+/*--------------------------------------------------------------*/
+/* Tcl function "ftdi::bitbang_write":				*/
+/*--------------------------------------------------------------*/
+
+int
+ftditcl_bang_write(ClientData clientData,
+	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+{
+   int result, nbytes;
+   int regnum, wordcount, i, j, value, tidx;
+   unsigned char wordwidth;
+   unsigned char flags;
+   unsigned char *tbuffer;
+   unsigned char *sigpins;
+   Tcl_Obj *vector, *lobj;
+
+   DWORD numWritten;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
+
+   if (objc != 4) {
+      Tcl_SetResult(interp, "bitbang_write: Need device name, "
+		"register, and vector of values.\n", NULL);
+      return TCL_ERROR;
+   }
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
+      Tcl_SetResult(interp, "bitbang_write:  No such device\n", NULL);
+      return TCL_ERROR;
+   }
+   flags = ftRecord->flags;
+   wordwidth = ftRecord->wordwidth;
+   sigpins = &(ftRecord->sigpins[0]);
+
+   // If we're not in bit-bang mode, use the normal spi_write.
+
+   if (!(flags & BITBANG_MODE)) {
+      result = spi_write(clientData, interp, objc, objv);
+      return result;
+   }
+
+   // First argument is register number.  This may or may not include
+   // additional information such as an opcode.  If so, it is the
+   // responsibility of the end-user to make sure that the opcode
+   // matches the use of routine "read" or "write".
+
+   result = Tcl_GetIntFromObj(interp, objv[2], &regnum);
+   if (result != TCL_OK) return result;
+
+   vector = objv[3];
+   result = Tcl_ListObjLength(interp, vector, &wordcount);
+   if (result != TCL_OK) return result;
+
+   for (i = 0; i < wordcount; i++) {
+      result = Tcl_ListObjIndex(interp, vector, i, &lobj);
+      if (result != TCL_OK) return result;
+      result = Tcl_GetIntFromObj(interp, lobj, &value);
+
+      if (value < 0 || value > 255) {
+         Tcl_SetResult(interp, "bitbang_write:  Byte value out of range 0-255\n",
+		NULL);
+	 return TCL_ERROR;
+      }
+   }
+
+   // Create complete vector to write in synchronous bit-bang
+   // mode.
+
+   nbytes = (wordcount * wordwidth * 2) + 1;
+   tbuffer = (unsigned char *)malloc(nbytes * sizeof(unsigned char));
+   tidx = 0;
+ 
+   // Assert CSB
+   tbuffer[tidx++] = (unsigned char)0;
+
+   for (i = 0; i < wordcount; i++) {
+      result = Tcl_ListObjIndex(interp, vector, i, &lobj);
+      result = Tcl_GetIntFromObj(interp, lobj, &value);
+      for (j = 0; j < wordwidth; j++) {
+	 // input changes on falling edge of SCK
+	 tbuffer[tidx++] = (value & (1 << j)) ? sigpins[BB_SDI] : 0;
+	 tbuffer[tidx] = tbuffer[tidx - 1] | sigpins[BB_SCK];
+	 tidx++;
+      }
+   }
+
+   // SPI write using bit bang
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)nbytes, &numWritten);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while writing SPI.\n", NULL);
+   else if (numWritten != (DWORD)nbytes)
+      Tcl_SetResult(interp, "bitbang write:  short write error.\n", NULL);
+
+   free(tbuffer);
+   return TCL_OK;
+}
+
+/*--------------------------------------------------------------*/
+/* Tcl function "ftdi::bitbang_read":				*/
+/*--------------------------------------------------------------*/
+
+int
+ftditcl_bang_read(ClientData clientData,
+	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+{
+   int result, nbytes, numRead;
+   int regnum, wordcount, i, j, value, tidx;
+   unsigned char flags;
+   unsigned char *tbuffer;
+   unsigned char wordwidth;
+   unsigned char *sigpins;
+   Tcl_Obj *vector, *lobj;
+
+   DWORD numWritten;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
+
+   if (objc != 4) {
+      Tcl_SetResult(interp, "bitbang_read: Need device name, "
+		"register, and word count.\n", NULL);
+      return TCL_ERROR;
+   }
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
+      Tcl_SetResult(interp, "bitbang_read:  No such device\n", NULL);
+      return TCL_ERROR;
+   }
+   flags = ftRecord->flags;
+   wordwidth = ftRecord->wordwidth;
+   sigpins = &(ftRecord->sigpins[0]);
+
+   // If we're not in bit-bang mode, use the normal spi_read.
+
+   if (!(flags & BITBANG_MODE)) {
+      result = spi_read(clientData, interp, objc, objv);
+      return result;
+   }
+
+   // First argument is register number.  This may or may not include
+   // additional information such as an opcode.  If so, it is the
+   // responsibility of the end-user to make sure that the opcode
+   // matches the use of routine "read" or "write".
+
+   result = Tcl_GetIntFromObj(interp, objv[2], &regnum);
+   if (result != TCL_OK) return result;
+   result = Tcl_GetIntFromObj(interp, objv[3], &wordcount);
+   if (result != TCL_OK) return result;
+
+   // Create complete vector to write in synchronous bit-bang mode.
+
+   nbytes = (wordcount * wordwidth * 2) + 1;
+   tbuffer = (unsigned char *)malloc(nbytes * sizeof(unsigned char));
+   tidx = 0;
+ 
+   // Assert CSB
+   tbuffer[tidx++] = (unsigned char)0;
+
+   for (i = 0; i < wordcount; i++) {
+      result = Tcl_ListObjIndex(interp, vector, i, &lobj);
+      result = Tcl_GetIntFromObj(interp, lobj, &value);
+      for (j = 0; j < wordwidth; j++) {
+	 // Drive clock by bit-bang
+	 tbuffer[tidx++] = sigpins[BB_SCK];
+	 tbuffer[tidx++] = 0;
+      }
+   }
+
+   // Purge read buffer
+   ftStatus = FT_Purge(ftHandle, (DWORD)FT_PURGE_RX);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while purging SPI RX.\n", NULL);
+
+   // SPI write using bit bang
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)nbytes, &numWritten);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while writing SPI.\n", NULL);
+   else if (numWritten != (DWORD)nbytes)
+      Tcl_SetResult(interp, "SPI write:  short write error.\n", NULL);
+
+   // SPI read using bit bang
+   ftStatus = FT_Read(ftHandle, tbuffer, (DWORD)nbytes, &numRead);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while reading SPI.\n", NULL);
+   else if (numRead != (DWORD)nbytes)
+      Tcl_SetResult(interp, "SPI read:  short read error.\n", NULL);
+
+   vector = Tcl_NewListObj(0, NULL);
+   tidx = 0;
+   for (i = 0; i < wordcount; i++) {
+      value = 0;
+      for (j = 0; j < wordwidth; j++) {
+	 if (tbuffer[tidx] & sigpins[BB_SDO]) {
+	    value |= (1 << j);
+	 }
+	 tidx += 2;
+      }
+      Tcl_ListObjAppendElement(interp, vector, Tcl_NewIntObj(value));
+   }
+
+   Tcl_SetObjResult(interp, vector);
+   free(tbuffer);
+   return TCL_OK;
+}
+
+/*--------------------------------------------------------------*/
 /* Tcl function "ftdi::spi_speed":  Set the SPI clock speed of	*/
 /* the FTDI MPSSE SPI protocol.					*/
 /*--------------------------------------------------------------*/
@@ -156,6 +646,7 @@ int
 ftditcl_spi_speed(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
+   FT_RECORD *ftRecord;
    FT_HANDLE ftHandle;
    FT_STATUS ftStatus;
 
@@ -172,9 +663,15 @@ ftditcl_spi_speed(ClientData clientData,
       Tcl_SetResult(interp, "spi_speed: Need device name and value (in MHz).\n", NULL);
       return TCL_ERROR;
    }
-   ftHandle = find_handle(Tcl_GetString(objv[1]), &flags);
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
    if (ftHandle == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "spi_speed:  No such device\n", NULL);
+      return TCL_ERROR;
+   }
+   else flags = ftRecord->flags;
+
+   if (flags & BITBANG_MODE) {
+      Tcl_SetResult(interp, "spi_speed: Unimplemented for bit-bang mode.\n", NULL);
       return TCL_ERROR;
    }
 
@@ -217,6 +714,7 @@ ftditcl_spi_read(ClientData clientData,
 
    DWORD numWritten;
    DWORD numRead;
+   FT_RECORD *ftRecord;
    FT_HANDLE ftHandle;
    FT_STATUS ftStatus;
 
@@ -225,10 +723,16 @@ ftditcl_spi_read(ClientData clientData,
 		"and byte count.\n", NULL);
       return TCL_ERROR;
    }
-   ftHandle = find_handle(Tcl_GetString(objv[1]), &flags);
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
    if (ftHandle == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "spi_read:  No such device\n", NULL);
       return TCL_ERROR;
+   }
+   else flags = ftRecord->flags;
+
+   if (flags & BITBANG_MODE) {
+      result = ftditcl_bang_read(clientData, interp, objc, objv);
+      return result;
    }
 
    result = Tcl_GetIntFromObj(interp, objv[2], &regnum);
@@ -312,6 +816,7 @@ ftditcl_spi_write(ClientData clientData,
    Tcl_Obj *vector, *lobj;
 
    DWORD numWritten;
+   FT_RECORD *ftRecord;
    FT_HANDLE ftHandle;
    FT_STATUS ftStatus;
 
@@ -320,10 +825,16 @@ ftditcl_spi_write(ClientData clientData,
 		"register, and vector of values.\n", NULL);
       return TCL_ERROR;
    }
-   ftHandle = find_handle(Tcl_GetString(objv[1]), &flags);
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
    if (ftHandle == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "spi_read:  No such device\n", NULL);
       return TCL_ERROR;
+   }
+   else flags = ftRecord->flags;
+
+   if (flags & BITBANG_MODE) {
+      result = ftditcl_bang_write(clientData, interp, objc, objv);
+      return result;
    }
 
    result = Tcl_GetIntFromObj(interp, objv[2], &regnum);
@@ -688,7 +1199,7 @@ ftditcl_close(ClientData clientData,
 	 ftRecordPtr = (FT_RECORD *)Tcl_GetHashValue(h);
 	 ftHandle = ftRecordPtr->ftHandle;
 
-	 /* To-do: provide same level of graceful closure as below */
+	 /* To-do:  provide same level of graceful closure as below */
 
 	 ftStatus = FT_Close(ftHandle);
 	 free(ftRecordPtr->description);
@@ -698,6 +1209,7 @@ ftditcl_close(ClientData clientData,
       Tcl_DeleteHashTable(&handletab);
       return TCL_OK;
    }
+
    ftHandle = find_handle(Tcl_GetString(objv[1]), &flags);
    if (ftHandle == (FT_HANDLE)NULL) return TCL_ERROR;
 
@@ -751,6 +1263,11 @@ static cmdstruct ftdi_commands[] =
    {"ftdi::spi_read", (void *)ftditcl_spi_read},
    {"ftdi::spi_write", (void *)ftditcl_spi_write},
    {"ftdi::spi_speed", (void *)ftditcl_spi_speed},
+   {"ftdi::spi_bitbang", (void *)ftditcl_spi_bitbang},
+   {"ftdi::bitbang_select", (void *)ftditcl_bang_select},
+   {"ftdi::bitbang_read", (void *)ftditcl_bang_read},
+   {"ftdi::bitbang_write", (void *)ftditcl_bang_write},
+   {"ftdi::bitbang_word", (void *)ftditcl_bang_word},
    {"ftdi::listdev", (void *)ftditcl_list},
    {"ftdi::opendev", (void *)ftditcl_open},
    {"ftdi::closedev", (void *)ftditcl_close},
