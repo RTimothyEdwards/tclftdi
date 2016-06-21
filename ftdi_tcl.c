@@ -374,64 +374,6 @@ ftditcl_bang_word(ClientData clientData,
 }
 
 /*--------------------------------------------------------------*/
-/* Tcl function "ftdi::bitbang_select":				*/
-/* Assert (1) or deassert (0) chip select in bit bang mode.	*/
-/*--------------------------------------------------------------*/
-
-int
-ftditcl_bang_select(ClientData clientData,
-	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
-{
-   int result;
-   int i, j, value, numWritten;
-   unsigned char wordwidth;
-   unsigned char flags, tbuffer;
-   unsigned char *sigpins;
-   Tcl_Obj *vector, *lobj;
-
-   FT_RECORD *ftRecord;
-   FT_HANDLE ftHandle;
-   FT_STATUS ftStatus;
-
-   if (objc != 4) {
-      Tcl_SetResult(interp, "bitbang_select: Need device name, "
-		"register, and vector of values.\n", NULL);
-      return TCL_ERROR;
-   }
-   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
-   if (ftHandle == (FT_HANDLE)NULL) {
-      Tcl_SetResult(interp, "bitbang_write:  No such device\n", NULL);
-      return TCL_ERROR;
-   }
-   flags = ftRecord->flags;
-   wordwidth = ftRecord->wordwidth;
-   sigpins = &(ftRecord->sigpins[0]);
-
-   // If we're not in bit-bang mode, just return
-
-   if (!(flags & BITBANG_MODE)) {
-      return TCL_OK;
-   }
-
-   // Only argument is true/false
-
-   result = Tcl_GetBooleanFromObj(interp, objv[2], &value);
-   if (result != TCL_OK) return result;
-
-   // Assert or deassert CSB
-   tbuffer = (unsigned char)(1 - value);
-
-   // SPI write using bit bang
-   ftStatus = FT_Write(ftHandle, &tbuffer, (DWORD)1, &numWritten);
-   if (ftStatus != FT_OK)
-      Tcl_SetResult(interp, "Received error while applying CSB.\n", NULL);
-   else if (numWritten != (DWORD)1)
-      Tcl_SetResult(interp, "bitbang select:  short write error.\n", NULL);
-
-   return TCL_OK;
-}
-
-/*--------------------------------------------------------------*/
 /* Tcl function "ftdi::bitbang_write":				*/
 /*--------------------------------------------------------------*/
 
@@ -500,12 +442,20 @@ ftditcl_bang_write(ClientData clientData,
    // Create complete vector to write in synchronous bit-bang
    // mode.
 
-   nbytes = (wordcount * wordwidth * 2) + 1;
+   nbytes = ((1 + wordcount) * wordwidth * 2) + 2;
    tbuffer = (unsigned char *)malloc(nbytes * sizeof(unsigned char));
    tidx = 0;
  
    // Assert CSB
    tbuffer[tidx++] = (unsigned char)0;
+
+   // Write command/register word
+   for (j = 0; j < wordwidth; j++) {
+      // input changes on falling edge of SCK
+      tbuffer[tidx++] = (regnum & (1 << j)) ? sigpins[BB_SDI] : 0;
+      tbuffer[tidx] = tbuffer[tidx - 1] | sigpins[BB_SCK];
+      tidx++;
+   }
 
    for (i = 0; i < wordcount; i++) {
       result = Tcl_ListObjIndex(interp, vector, i, &lobj);
@@ -517,6 +467,9 @@ ftditcl_bang_write(ClientData clientData,
 	 tidx++;
       }
    }
+
+   // De-assert CSB
+   tbuffer[tidx++] = (unsigned char)sigpins[BB_CSB];
 
    // SPI write using bit bang
    ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)nbytes, &numWritten);
@@ -583,22 +536,33 @@ ftditcl_bang_read(ClientData clientData,
 
    // Create complete vector to write in synchronous bit-bang mode.
 
-   nbytes = (wordcount * wordwidth * 2) + 1;
+   nbytes = ((1 + wordcount) * wordwidth * 2) + 2;
    tbuffer = (unsigned char *)malloc(nbytes * sizeof(unsigned char));
    tidx = 0;
  
    // Assert CSB
    tbuffer[tidx++] = (unsigned char)0;
 
+   // Write command/register word
+   for (j = 0; j < wordwidth; j++) {
+      // input changes on falling edge of SCK
+      tbuffer[tidx++] = (regnum & (1 << j)) ? sigpins[BB_SDI] : 0;
+      tbuffer[tidx] = tbuffer[tidx - 1] | sigpins[BB_SCK];
+      tidx++;
+   }
+
    for (i = 0; i < wordcount; i++) {
       result = Tcl_ListObjIndex(interp, vector, i, &lobj);
       result = Tcl_GetIntFromObj(interp, lobj, &value);
       for (j = 0; j < wordwidth; j++) {
 	 // Drive clock by bit-bang
-	 tbuffer[tidx++] = sigpins[BB_SCK];
 	 tbuffer[tidx++] = 0;
+	 tbuffer[tidx++] = sigpins[BB_SCK];
       }
    }
+
+   // De-assert CSB
+   tbuffer[tidx++] = (unsigned char)sigpins[BB_CSB];
 
    // Purge read buffer
    ftStatus = FT_Purge(ftHandle, (DWORD)FT_PURGE_RX);
@@ -620,8 +584,8 @@ ftditcl_bang_read(ClientData clientData,
       Tcl_SetResult(interp, "SPI read:  short read error.\n", NULL);
 
    vector = Tcl_NewListObj(0, NULL);
-   tidx = 0;
-   for (i = 0; i < wordcount; i++) {
+   tidx = 1 + 2 * wordwidth;	// No readback during reg/command write
+   for (i = 1; i < wordcount; i++) {
       value = 0;
       for (j = 0; j < wordwidth; j++) {
 	 if (tbuffer[tidx] & sigpins[BB_SDO]) {
@@ -1264,7 +1228,6 @@ static cmdstruct ftdi_commands[] =
    {"ftdi::spi_write", (void *)ftditcl_spi_write},
    {"ftdi::spi_speed", (void *)ftditcl_spi_speed},
    {"ftdi::spi_bitbang", (void *)ftditcl_spi_bitbang},
-   {"ftdi::bitbang_select", (void *)ftditcl_bang_select},
    {"ftdi::bitbang_read", (void *)ftditcl_bang_read},
    {"ftdi::bitbang_write", (void *)ftditcl_bang_write},
    {"ftdi::bitbang_word", (void *)ftditcl_bang_word},
