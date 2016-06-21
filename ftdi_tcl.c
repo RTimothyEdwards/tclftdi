@@ -469,7 +469,7 @@ ftditcl_bang_write(ClientData clientData,
    // If we're not in bit-bang mode, use the normal spi_write.
 
    if (!(flags & BITBANG_MODE)) {
-      result = spi_write(clientData, interp, objc, objv);
+      result = ftditcl_spi_write(clientData, interp, objc, objv);
       return result;
    }
 
@@ -567,7 +567,7 @@ ftditcl_bang_read(ClientData clientData,
    // If we're not in bit-bang mode, use the normal spi_read.
 
    if (!(flags & BITBANG_MODE)) {
-      result = spi_read(clientData, interp, objc, objv);
+      result = ftditcl_spi_read(clientData, interp, objc, objv);
       return result;
    }
 
