@@ -35,6 +35,7 @@ typedef struct _FT_RECORD {
 #define BITBANG_MODE 0x4	// Set bit-bang mode
 
 Tcl_HashTable handletab;
+Tcl_Interp *ftdiinterp;
 
 /*--------------------------------------------------------------*/
 /* Miscellaneous stuff						*/
@@ -946,7 +947,7 @@ ftditcl_open(ClientData clientData,
    FT_DEVICE_LIST_INFO_NODE *infonode;
    DWORD numDevs, numBytes;
    DWORD numWritten, numRead;
-   int devnum, new, devidx, argstart;
+   int devnum, new, devidx, argstart, result;
    unsigned char flags = 0x0;
    char tclhandle[32], *devstr, *swstr;
    unsigned char tbuffer[12], rbuffer[12];
@@ -976,8 +977,9 @@ ftditcl_open(ClientData clientData,
    // Allow the driver to handle our unique product code
    ftStatus = FT_SetVIDPID((DWORD)0x0403, (DWORD)0x60ff);
    if (ftStatus != FT_OK) {
-      fprintf(stderr, "Unable to set extended device ID (error %d)\n", (int)ftStatus);
-      exit(1);
+      Fprintf(interp, stderr, "Unable to set extended device ID (error %d)\n",
+			(int)ftStatus);
+      return TCL_ERROR;
    }
 
    // Generate a list of USB devices and check for match with the
@@ -1088,6 +1090,7 @@ ftditcl_open(ClientData clientData,
 
       devnum = ++ftdinum;
       sprintf(tclhandle, "ftdi%d", devnum);
+
       h = Tcl_CreateHashEntry(&handletab, (CONST char *)tclhandle, &new);
       if (new > 0) {
 	 ftRecordPtr = (FT_RECORD *)malloc(sizeof(FT_RECORD));
@@ -1095,6 +1098,7 @@ ftditcl_open(ClientData clientData,
 	 ftRecordPtr->description = strdup(infonode[devidx].Description);
 	 ftRecordPtr->flags = flags;
 	 Tcl_SetHashValue(h, ftRecordPtr);
+	 result = TCL_OK;
       }
       else {
 	 Tcl_SetResult(interp, "open:  Name already defined\n", NULL);
@@ -1102,8 +1106,12 @@ ftditcl_open(ClientData clientData,
 	 return TCL_ERROR;
       }
       tobj = Tcl_NewStringObj(tclhandle, -1);
-      Tcl_SetObjResult(interp, tobj);
-      // lprintf(stderr, "Opening device %s\n", tclhandle);
+
+      /* For everything beyond this point, the device is open	*/
+      /* and the result code has been set.  All other errors	*/
+      /* should be printed to stderr but not passed as a result	*/
+      /* code.  It will be the responsibility of the end-user	*/
+      /* to deal with an open device that is not acting normal.	*/
 
       /* Sanity check:  Give an error code (invalid opcode 0xff)  */
       /* and read the response "0xfa 0xff".			  */
@@ -1111,16 +1119,20 @@ ftditcl_open(ClientData clientData,
       tbuffer[0] = 0xff;		// not a command
 
       ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)1, &numWritten);
-      if (ftStatus != FT_OK)
-         Tcl_SetResult(interp, "Received error while writing init data\n", NULL);
-      else if (numWritten != (DWORD)1)
-         Tcl_SetResult(interp, "Short write error\n", NULL);
+      if (ftStatus != FT_OK) {
+         Fprintf(interp, stderr, "Received error while writing test data\n");
+	 result = TCL_ERROR;
+      }
+      else if (numWritten != (DWORD)1) {
+         Fprintf(interp, stderr, "Short write error on test data\n");
+	 result = TCL_ERROR;
+      }
 
       ftStatus = FT_Read(ftHandle, rbuffer, (DWORD)2, &numRead);
       if (ftStatus != FT_OK || numRead != 2) {
-         Tcl_SetResult(interp, "Error message not received after invalid"
-			" command.\n", NULL);
-	 // good luck with that. . .
+         Fprintf(interp, stderr, "Error message not received after invalid"
+			" command.\n");
+	 result = TCL_ERROR;
       }
       free(infonode);
 
@@ -1130,51 +1142,35 @@ ftditcl_open(ClientData clientData,
       tbuffer[2] = 0x0b;
 
       ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)3, &numWritten);
-      if (ftStatus != FT_OK)
-         Tcl_SetResult(interp, "Received error while asserting CS.", NULL);
-      else if (numWritten != (DWORD)3)
-         Tcl_SetResult(interp, "Short write error\n", NULL);
+      if (ftStatus != FT_OK) {
+         Fprintf(interp, stderr, "Received error while asserting CS.\n");
+	 result = TCL_ERROR;
+      }
+      else if (numWritten != (DWORD)3) {
+         Fprintf(interp, stderr, "Short write error while asserting CS\n");
+	 result = TCL_ERROR;
+      }
+      Tcl_SetObjResult(interp, tobj);
    }
-   return TCL_OK;
+   return result;
 }
 
 //--------------------------------------------------------------
-// Tcl function "ftdi_close"
-// Close an ftdi device
+// Graceful closure of a single device
 //--------------------------------------------------------------
 
-int
-ftditcl_close(ClientData clientData,
-	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+int close_device(Tcl_Interp *interp, char *devname)
 {
-   Tcl_HashSearch hs;
-   Tcl_HashEntry *h;
-   unsigned char tbuffer[12];
-   unsigned char flags;
-
-   DWORD numWritten;
    FT_HANDLE ftHandle;
    FT_STATUS ftStatus;
    FT_RECORD *ftRecordPtr;
- 
-   if (objc == 1) {
-      h = Tcl_FirstHashEntry(&handletab, &hs);
-      while (h != NULL) {
-	 ftRecordPtr = (FT_RECORD *)Tcl_GetHashValue(h);
-	 ftHandle = ftRecordPtr->ftHandle;
+   DWORD numWritten;
+   Tcl_HashSearch hs;
+   Tcl_HashEntry *h;
+   unsigned char flags;
+   unsigned char tbuffer[12];
 
-	 /* To-do:  provide same level of graceful closure as below */
-
-	 ftStatus = FT_Close(ftHandle);
-	 free(ftRecordPtr->description);
-	 free(ftRecordPtr);
-	 h = Tcl_NextHashEntry(&hs);
-      }
-      Tcl_DeleteHashTable(&handletab);
-      return TCL_OK;
-   }
-
-   ftHandle = find_handle(Tcl_GetString(objv[1]), &flags);
+   ftHandle = find_handle(devname, &flags);
    if (ftHandle == (FT_HANDLE)NULL) return TCL_ERROR;
 
    tbuffer[0] = 0x80;        // Set Dbus
@@ -1199,12 +1195,53 @@ ftditcl_close(ClientData clientData,
       Tcl_SetResult(interp, "Received error while closing device.", NULL);
       return TCL_ERROR;
    }
-   h = Tcl_FindHashEntry(&handletab, Tcl_GetString(objv[1]));
+   h = Tcl_FindHashEntry(&handletab, devname);
    if (h != (Tcl_HashEntry *)NULL) {
       ftRecordPtr = (FT_RECORD *)Tcl_GetHashValue(h);
       free(ftRecordPtr->description);
       free(ftRecordPtr);
       Tcl_DeleteHashEntry(h);
+   }
+   return TCL_OK;
+}
+
+//--------------------------------------------------------------
+// Tcl function "ftdi_close"
+// Close an ftdi device
+//--------------------------------------------------------------
+
+int
+ftditcl_close(ClientData clientData,
+	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+{
+   Tcl_HashSearch hs;
+   Tcl_HashEntry *h;
+   char *devname;
+   int result;
+
+   FT_HANDLE ftHandle;
+   FT_RECORD *ftRecordPtr;
+ 
+   if (objc == 1) {
+      h = Tcl_FirstHashEntry(&handletab, &hs);
+      while (h != NULL) {
+	 ftRecordPtr = (FT_RECORD *)Tcl_GetHashValue(h);
+	 ftHandle = ftRecordPtr->ftHandle;
+
+         devname = Tcl_GetHashKey(&handletab, h);
+	 result = close_device(interp, devname);
+	 if (result != TCL_OK) return result;
+      }
+      return TCL_OK;
+   }
+   else {
+      int i;
+
+      for (i = 1; i < objc; i++) {
+	 devname = Tcl_GetString(objv[i]);
+	 result = close_device(interp, devname);
+	 if (result != TCL_OK) return result;
+      }
    }
    return TCL_OK;
 }
@@ -1238,6 +1275,81 @@ static cmdstruct ftdi_commands[] =
 };
 
 /*--------------------------------------------------------------*/
+/* Stdout/Stderr redirect to Tk console				*/
+/*--------------------------------------------------------------*/
+
+void tcl_vprintf(Tcl_Interp *interp, FILE *f, const char *fmt, va_list args_in)
+{
+    va_list args;
+    static char outstr[128] = "puts -nonewline std";
+    char *outptr, *bigstr = NULL, *finalstr = NULL;
+    int i, nchars, result, escapes = 0, limit;
+
+    strcpy (outstr + 19, (f == stderr) ? "err \"" : "out \"");
+    outptr = outstr;
+
+    va_copy(args, args_in);
+    nchars = vsnprintf(outptr + 24, 102, fmt, args);
+    va_end(args);
+
+    if (nchars >= 102)
+    {
+        va_copy(args, args_in);
+        bigstr = Tcl_Alloc(nchars + 26);
+        strncpy(bigstr, outptr, 24);
+        outptr = bigstr;
+        vsnprintf(outptr + 24, nchars + 2, fmt, args);
+        va_end(args);
+    }
+    else if (nchars == -1) nchars = 126;
+
+    for (i = 24; *(outptr + i) != '\0'; i++) {
+        if (*(outptr + i) == '\"' || *(outptr + i) == '[' ||
+                *(outptr + i) == ']' || *(outptr + i) == '\\')
+            escapes++;
+    }
+
+    if (escapes > 0)
+    {
+        finalstr = Tcl_Alloc(nchars + escapes + 26);
+        strncpy(finalstr, outptr, 24);
+        escapes = 0;
+        for (i = 24; *(outptr + i) != '\0'; i++)
+        {
+            if (*(outptr + i) == '\"' || *(outptr + i) == '[' ||
+                        *(outptr + i) == ']' || *(outptr + i) == '\\')
+            {
+                *(finalstr + i + escapes) = '\\';
+                escapes++;
+            }
+            *(finalstr + i + escapes) = *(outptr + i);
+        }
+        outptr = finalstr;
+    }
+
+    *(outptr + 24 + nchars + escapes) = '\"';
+    *(outptr + 25 + nchars + escapes) = '\0';
+
+    result = Tcl_Eval(interp, outptr);
+
+    if (bigstr != NULL) Tcl_Free(bigstr);
+    if (finalstr != NULL) Tcl_Free(finalstr);
+}
+
+/*------------------------------------------------------*/
+/* Redefine the printf routine as Fprintf		*/
+/*------------------------------------------------------*/
+
+void Fprintf(Tcl_Interp *interp, FILE *f, char *format, ...)
+{
+  va_list ap;
+
+  va_start(ap, format);
+  tcl_vprintf(interp, f, format, ap);
+  va_end(ap);
+}
+
+/*--------------------------------------------------------------*/
 /* Tcl package initialization function				*/
 /*--------------------------------------------------------------*/
 
@@ -1249,7 +1361,13 @@ Tclftdi_Init(Tcl_Interp *interp)
 
    if (interp == NULL) return TCL_ERROR;
 
+   /* Remember the interpreter (global variable) */
+   ftdiinterp = interp;
+
    if (Tcl_InitStubs(interp, "8.4", 0) == NULL) return TCL_ERROR;
+
+   Tcl_Eval(interp, "namespace eval ftdi namespace export *");
+   Tcl_PkgProvide(interp, "Tclftdi", "1.0");
 
    for (cmdidx = 0; ftdi_commands[cmdidx].func != NULL; cmdidx++) {
       sprintf(command, "%s", ftdi_commands[cmdidx].cmdstr);
@@ -1257,8 +1375,6 @@ Tclftdi_Init(Tcl_Interp *interp)
 		(Tcl_ObjCmdProc *)ftdi_commands[cmdidx].func,
 		(ClientData)NULL, (Tcl_CmdDeleteProc *)NULL);
    }
-   Tcl_Eval(interp, "namespace eval ftdi namespace export *");
-   Tcl_PkgProvide(interp, "Tclftdi", "1.0");
    Tcl_InitHashTable(&handletab, TCL_STRING_KEYS);
    return TCL_OK;
 }
