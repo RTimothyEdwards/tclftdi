@@ -275,7 +275,7 @@ ftditcl_spi_bitbang(ClientData clientData,
 			"one of CSB, SDO, SDI, or SCK\n", NULL);
 	    return TCL_ERROR;
 	 }
-	 result = Tcl_ListObjIndex(interp, sigpair, 0, &sigval);
+	 result = Tcl_ListObjIndex(interp, sigpair, 1, &sigval);
 	 result = Tcl_GetIntFromObj(interp, sigval, &k);
 	 sigpins[j] = 0x01 << k;  // Convert bit number to bit mask
 
