@@ -553,8 +553,6 @@ ftditcl_bang_read(ClientData clientData,
    }
 
    for (i = 0; i < wordcount; i++) {
-      result = Tcl_ListObjIndex(interp, vector, i, &lobj);
-      result = Tcl_GetIntFromObj(interp, lobj, &value);
       for (j = 0; j < wordwidth; j++) {
 	 // Drive clock by bit-bang
 	 tbuffer[tidx++] = 0;
@@ -586,7 +584,7 @@ ftditcl_bang_read(ClientData clientData,
 
    vector = Tcl_NewListObj(0, NULL);
    tidx = 1 + 2 * wordwidth;	// No readback during reg/command write
-   for (i = 1; i < wordcount; i++) {
+   for (i = 0; i < wordcount; i++) {
       value = 0;
       for (j = 0; j < wordwidth; j++) {
 	 if (tbuffer[tidx] & sigpins[BB_SDO]) {
