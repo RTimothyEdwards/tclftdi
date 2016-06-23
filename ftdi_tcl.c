@@ -13,6 +13,8 @@
 
 /* Forward declarations */
 
+extern void Fprintf(Tcl_Interp *interp, FILE *f, char *format, ...);
+
 /*--------------------------------------------------------------*/
 /* Structure to manage device handles				*/
 /* Each device record contains the device handle and the	*/
@@ -302,6 +304,13 @@ ftditcl_spi_bitbang(ClientData clientData,
    ftStatus = FT_ResetDevice(ftHandle);
    if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while resetting device.\n", NULL);
+
+   // Set baudrate to default (Note: actual bits per second is 16 times the value)
+   // So 62500 baud = 1Mbps.  However, SCK clock takes two transmissions (up, down)
+   // so double this value to get a 1Mpbs SCK, or 125000.
+   ftStatus = FT_SetBaudRate(ftHandle, (DWORD)125000);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while setting baud rate.\n", NULL);
 
    // Set device to Synchronous bit-bang mode, with pins SCK, SDI, and CSB
    // set to output, SDO to input.
@@ -633,13 +642,27 @@ ftditcl_spi_speed(ClientData clientData,
    }
    else flags = ftRecord->flags;
 
-   if (flags & BITBANG_MODE) {
-      Tcl_SetResult(interp, "spi_speed: Unimplemented for bit-bang mode.\n", NULL);
-      return TCL_ERROR;
-   }
-
    result = Tcl_GetDoubleFromObj(interp, objv[2], &mhz);
    if (result != TCL_OK) return result;
+
+   if (flags & BITBANG_MODE) {
+      ftStatus = FT_SetBaudRate(ftHandle, (DWORD)125000);
+      if (ftStatus != FT_OK) {
+	 Tcl_SetResult(interp, "Received error while setting baud rate.\n", NULL);
+	 return TCL_ERROR;
+      }
+
+      // Bitbang rate calculation:  bitbang update rate is the baud rate
+      // * 16, but SCK takes two transmissions (up, down), so SCK rate is
+      // the baud rate * 8.
+
+      ftStatus = FT_SetBaudRate(ftHandle, (DWORD)((mhz / 8.0) * 1.0E6));
+      if (ftStatus != FT_OK) {
+         Tcl_SetResult(interp, "Received error while setting baud rate.\n", NULL);
+	 return TCL_ERROR;
+      }
+      return TCL_OK;
+   }
 
    /* Convert double into two bytes in tbuffer */
 
