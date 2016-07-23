@@ -493,6 +493,96 @@ ftditcl_bang_write(ClientData clientData,
 }
 
 /*--------------------------------------------------------------*/
+/* Tcl function "ftdi::bitbang_set":				*/
+/* Apply individual signal changes.				*/
+/* Use:  bitbang_set <device> <pinlist> ...			*/
+/* Pinlist contains all pins to be set (null list if all pins	*/
+/* should be cleared).  Use multiple lists for operations to be	*/
+/* separated by one clock cycle.				*/
+/* Ex: "bitbang_set ftdi0 {SDI SCK} {SDI} {}"			*/
+/*--------------------------------------------------------------*/
+
+int
+ftditcl_bang_set(ClientData clientData,
+	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+{
+   int result, numobj, nbytes;
+   int i, j, k, value, tidx;
+   unsigned char flags;
+   unsigned char *tbuffer;
+   unsigned char *sigpins;
+   Tcl_Obj *vector, *lobj;
+
+   DWORD numWritten;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
+
+   if (objc < 2) {
+      Tcl_SetResult(interp, "bitbang_set: Need device name and at least "
+		"one pin and value pair.\n", NULL);
+      return TCL_ERROR;
+   }
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
+      Tcl_SetResult(interp, "bitbang_set:  No such device\n", NULL);
+      return TCL_ERROR;
+   }
+   flags = ftRecord->flags;
+   sigpins = &(ftRecord->sigpins[0]);
+
+   nbytes = objc - 2;
+   tbuffer = (unsigned char *)malloc(nbytes * sizeof(unsigned char));
+
+   for (i = 0; i < objc - 2; i++) {
+
+      /* Parse pin list and apply value */
+      result = Tcl_ListObjLength(interp, objv[i + 2], &numobj);
+      if (result != TCL_OK) return result;
+      if (numobj > 4) {
+	 Tcl_SetResult(interp, "Each entry must be a list of pins\n", NULL);
+	 free(tbuffer);
+	 return TCL_ERROR;
+      }
+      tbuffer[i] = 0;
+      for (k = 0; k < numobj; k++) {
+         result = Tcl_ListObjIndex(interp, objv[i + 2], k, &lobj);
+         if (result != TCL_OK) {
+	    free(tbuffer);
+	    return result;
+	 }
+         if (!strcasecmp(Tcl_GetString(lobj), "CSB"))
+	    j = BB_CSB;
+         else if (!strcasecmp(Tcl_GetString(lobj), "SDO"))
+	    j = BB_SDO;
+         else if (!strcasecmp(Tcl_GetString(lobj), "SDI"))
+	    j = BB_SDI;
+         else if (!strcasecmp(Tcl_GetString(lobj), "SCK"))
+	    j = BB_SCK;
+         else {
+	    Tcl_SetResult(interp, "bitbang_set:  Unknown signal name.  "
+			"Must be one of CSB, SDO, SDI, or SCK\n", NULL);
+	    free(tbuffer);
+	    return TCL_ERROR;
+         }
+         tbuffer[i] |= sigpins[j];
+      }
+      // Fprintf(interp, stderr, "Byte %d set to %d\n", i, tbuffer[i]);
+   }
+   // Fprintf(interp, stderr, "Writing %d bytes\n", nbytes);
+
+   // Simple bit bang write
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)nbytes, &numWritten);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while banging bits.\n", NULL);
+   else if (numWritten != (DWORD)nbytes)
+      Tcl_SetResult(interp, "bitbang set:  short write error.\n", NULL);
+
+   free(tbuffer);
+   return TCL_OK;
+}
+
+/*--------------------------------------------------------------*/
 /* Tcl function "ftdi::bitbang_read":				*/
 /*--------------------------------------------------------------*/
 
@@ -1289,6 +1379,7 @@ static cmdstruct ftdi_commands[] =
    {"ftdi::bitbang_read", (void *)ftditcl_bang_read},
    {"ftdi::bitbang_write", (void *)ftditcl_bang_write},
    {"ftdi::bitbang_word", (void *)ftditcl_bang_word},
+   {"ftdi::bitbang_set", (void *)ftditcl_bang_set},
    {"ftdi::listdev", (void *)ftditcl_list},
    {"ftdi::opendev", (void *)ftditcl_open},
    {"ftdi::closedev", (void *)ftditcl_close},
