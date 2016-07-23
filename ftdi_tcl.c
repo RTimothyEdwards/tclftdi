@@ -27,7 +27,7 @@ typedef struct _FT_RECORD {
    char *description;
    unsigned char flags;
    unsigned char wordwidth;	// For bit-bang mode
-   unsigned char sigpins[4];	// For bit-bang mode
+   unsigned char sigpins[8];	// For bit-bang mode
 } FT_RECORD;
 
 /* Flag definitions */
@@ -186,6 +186,10 @@ ftditcl_verbose(ClientData clientData,
 #define BB_SDO 1
 #define BB_SDI 2
 #define BB_SCK 3
+#define BB_USR0 4
+#define BB_USR1 5
+#define BB_USR2 6
+#define BB_USR3 7
 
 int
 ftditcl_spi_bitbang(ClientData clientData,
@@ -203,7 +207,7 @@ ftditcl_spi_bitbang(ClientData clientData,
    unsigned char tbuffer[1];
    unsigned char flags;
    unsigned char sigio, sigassn;
-   int len, bangmode;
+   int len, loclen, bangmode;
    char *sigchar;
    Tcl_Obj *sigpair, *sigval;
 
@@ -230,11 +234,15 @@ ftditcl_spi_bitbang(ClientData clientData,
 	 /* Set default signals. */
 	 ftRecord->flags |= BITBANG_MODE;
 	 ftRecord->wordwidth = 8;
+	 sigpins[7] = 0x80;	// ADBUS7 = USR3
+	 sigpins[6] = 0x40;	// ADBUS6 = USR2
+	 sigpins[5] = 0x20;	// ADBUS5 = USR1
+	 sigpins[4] = 0x10;	// ADBUS4 = USR0
 	 sigpins[3] = 0x08;	// ADBUS3 = SCK
 	 sigpins[2] = 0x04;	// ADBUS2 = SDI
 	 sigpins[1] = 0x02;	// ADBUS1 = SDO
 	 sigpins[0] = 0x01;	// ADBUS0 = CSB
-	 sigio = 0x0d;		// 1 = output, 0 = input
+	 sigio = 0xfd;		// 1 = output, 0 = input
       }
       else {
 	 // Turn off bit bang mode, return to MPSSE mode
@@ -245,16 +253,28 @@ ftditcl_spi_bitbang(ClientData clientData,
 	 return TCL_ERROR;
       }
    }
-   else if (len == 4) {
+   else {
       /* Declare SPI signals.  Each should be a list of length two */
       ftRecord->flags |= BITBANG_MODE;
       ftRecord->wordwidth = 8;
-      sigio = 0x00;
+      sigio = 0xff;
       sigassn = 0x00;
-      for (i = 0; i < 4; i++) {
+      for (i = 0; i < 8; i++) sigpins[i] = 0;
+      if (len < 4) {
+	 Tcl_SetResult(interp, "spi_bitbang:  Must at least declare "
+		"SCK, SDI, SDO, and CSB\n", NULL);
+	 return TCL_ERROR;
+      }
+      else if (len > 8) {
+	 Tcl_SetResult(interp, "spi_bitbang:  Can only define up to 8 signals\n",
+			NULL);
+	 return TCL_ERROR;
+      }
+
+      for (i = 0; i < len; i++) {
          result = Tcl_ListObjIndex(interp, objv[2], i, &sigpair);
-	 result = Tcl_ListObjLength(interp, sigpair, &len);
-	 if (len != 2) {
+	 result = Tcl_ListObjLength(interp, sigpair, &loclen);
+	 if (loclen != 2) {
 	    Tcl_SetResult(interp, "spi_bitbang:  List of signals must be in"
 			"form {signal, bit}. bit is 0 to 7\n", NULL);
 	    return TCL_ERROR;
@@ -272,32 +292,35 @@ ftditcl_spi_bitbang(ClientData clientData,
 	    j = BB_SDI;
 	 else if (!strcasecmp(Tcl_GetString(sigval), "SCK"))
 	    j = BB_SCK;
+	 else if (!strcasecmp(Tcl_GetString(sigval), "USR0"))
+	    j = BB_USR0;
+	 else if (!strcasecmp(Tcl_GetString(sigval), "USR1"))
+	    j = BB_USR1;
+	 else if (!strcasecmp(Tcl_GetString(sigval), "USR2"))
+	    j = BB_USR2;
+	 else if (!strcasecmp(Tcl_GetString(sigval), "USR3"))
+	    j = BB_USR3;
 	 else {
 	    Tcl_SetResult(interp, "spi_bitbang:  Unknown signal name.  Must be "
-			"one of CSB, SDO, SDI, or SCK\n", NULL);
+			"one of CSB, SDO, SDI, SCK, or USR0 to USR3\n", NULL);
 	    return TCL_ERROR;
 	 }
 	 result = Tcl_ListObjIndex(interp, sigpair, 1, &sigval);
 	 result = Tcl_GetIntFromObj(interp, sigval, &k);
 	 sigpins[j] = 0x01 << k;  // Convert bit number to bit mask
 
-	 if (j != BB_SDO) sigio |= sigpins[j];
+	 if (j == BB_SDO) sigio &= ~sigpins[j];
 	 sigassn |= sigpins[j];
       }
 
       // Check that all pins are assigned.  
       j = 0;
       for (i = 0; i < 8; i++) if (sigassn & (1 << i)) j++;
-      if (j != 4) {
+      if (j != len) {
 	 Tcl_SetResult(interp, "spi_bitbang:  Not all signals assigned.  Must "
 			"assign all of CSB, SDO, SDI, and SCK\n", NULL);
 	 return TCL_ERROR;
       }
-   }
-   else {
-      Tcl_SetResult(interp, "spi_bitbang:  Options are on, off, or list "
-		"of signals.\n", NULL);
-      return TCL_ERROR;
    }
 
    // Reset the FTDI device
@@ -539,7 +562,7 @@ ftditcl_bang_set(ClientData clientData,
       /* Parse pin list and apply value */
       result = Tcl_ListObjLength(interp, objv[i + 2], &numobj);
       if (result != TCL_OK) return result;
-      if (numobj > 4) {
+      if (numobj > 8) {
 	 Tcl_SetResult(interp, "Each entry must be a list of pins\n", NULL);
 	 free(tbuffer);
 	 return TCL_ERROR;
@@ -559,6 +582,14 @@ ftditcl_bang_set(ClientData clientData,
 	    j = BB_SDI;
          else if (!strcasecmp(Tcl_GetString(lobj), "SCK"))
 	    j = BB_SCK;
+         else if (!strcasecmp(Tcl_GetString(lobj), "USR0"))
+	    j = BB_USR0;
+         else if (!strcasecmp(Tcl_GetString(lobj), "USR1"))
+	    j = BB_USR1;
+         else if (!strcasecmp(Tcl_GetString(lobj), "USR2"))
+	    j = BB_USR2;
+         else if (!strcasecmp(Tcl_GetString(lobj), "USR3"))
+	    j = BB_USR3;
          else {
 	    Tcl_SetResult(interp, "bitbang_set:  Unknown signal name.  "
 			"Must be one of CSB, SDO, SDI, or SCK\n", NULL);
@@ -567,9 +598,9 @@ ftditcl_bang_set(ClientData clientData,
          }
          tbuffer[i] |= sigpins[j];
       }
-      // Fprintf(interp, stderr, "Byte %d set to %d\n", i, tbuffer[i]);
+      Fprintf(interp, stderr, "Byte %d set to %d\n", i, tbuffer[i]);
    }
-   // Fprintf(interp, stderr, "Writing %d bytes\n", nbytes);
+   Fprintf(interp, stderr, "Writing %d bytes\n", nbytes);
 
    // Simple bit bang write
    ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)nbytes, &numWritten);
