@@ -598,9 +598,9 @@ ftditcl_bang_set(ClientData clientData,
          }
          tbuffer[i] |= sigpins[j];
       }
-      Fprintf(interp, stderr, "Byte %d set to %d\n", i, tbuffer[i]);
+      // Fprintf(interp, stderr, "Byte %d set to %d\n", i, tbuffer[i]);
    }
-   Fprintf(interp, stderr, "Writing %d bytes\n", nbytes);
+   // Fprintf(interp, stderr, "Writing %d bytes\n", nbytes);
 
    // Simple bit bang write
    ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)nbytes, &numWritten);
@@ -713,7 +713,7 @@ ftditcl_bang_read(ClientData clientData,
       Tcl_SetResult(interp, "SPI read:  short read error.\n", NULL);
 
    vector = Tcl_NewListObj(0, NULL);
-   tidx = 1 + 2 * wordwidth;	// No readback during reg/command write
+   tidx = 3 + 2 * wordwidth;	// No readback during reg/command write
    for (i = 0; i < wordcount; i++) {
       value = 0;
       for (j = 0; j < wordwidth; j++) {
@@ -1166,7 +1166,7 @@ ftditcl_open(ClientData clientData,
       }
       Tcl_SetObjResult(interp, lobj);
       free(infonode);
-      return TCL_ERROR;
+      return TCL_OK;
    }
 
    ftStatus = FT_OpenEx(infonode[devidx].Description, FT_OPEN_BY_DESCRIPTION,
