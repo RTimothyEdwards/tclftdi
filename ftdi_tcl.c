@@ -31,10 +31,11 @@ typedef struct _FT_RECORD {
 } FT_RECORD;
 
 /* Flag definitions */
-#define CS_INVERT   0x01
-#define MIXED_MODE  0x03	// Mixed mode has SDI and SDO on
+#define CS_INVERT    0x01	// CS is sense-positive
+#define MIXED_MODE   0x03	// Mixed mode has SDI and SDO on
 				// different SCK edges.
-#define BITBANG_MODE 0x4	// Set bit-bang mode
+#define BITBANG_MODE 0x04	// Set bit-bang mode
+#define CSB_NORAISE  0x08	// CSB is not raised after read or write
 
 Tcl_HashTable handletab;
 Tcl_Interp *ftdiinterp;
@@ -502,7 +503,8 @@ ftditcl_bang_write(ClientData clientData,
    }
 
    // De-assert CSB
-   tbuffer[tidx++] = (unsigned char)sigpins[BB_CSB];
+   tbuffer[tidx++] = (flags & CSB_NORAISE) ? (unsigned char)0 :
+		(unsigned char)sigpins[BB_CSB];
 
    // SPI write using bit bang
    ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)nbytes, &numWritten);
@@ -691,7 +693,8 @@ ftditcl_bang_read(ClientData clientData,
    }
 
    // De-assert CSB
-   tbuffer[tidx++] = (unsigned char)sigpins[BB_CSB];
+   tbuffer[tidx++] = (flags & CSB_NORAISE) ? (unsigned char)0 :
+		(unsigned char)sigpins[BB_CSB];
 
    // Purge read buffer
    ftStatus = FT_Purge(ftHandle, (DWORD)FT_PURGE_RX);
@@ -727,6 +730,75 @@ ftditcl_bang_read(ClientData clientData,
 
    Tcl_SetObjResult(interp, vector);
    free(tbuffer);
+   return TCL_OK;
+}
+
+/*--------------------------------------------------------------*/
+/* Tcl function "ftdi::spi_csb_mode":  Change the behavior of	*/
+/* the SPI with respect to CSB.  This function takes one	*/
+/* integer argument in addition to the device name:		*/
+/*								*/
+/*	0: CSB is not de-asserted after each read and write	*/
+/*	1: CSB is de-asserted after each read and write		*/
+/*								*/
+/* NOTE: Currently this is only defined for bit-bang mode.	*/
+/*--------------------------------------------------------------*/
+
+int
+ftditcl_spi_csb_mode(ClientData clientData,
+	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+{
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
+
+   DWORD numWritten;
+
+   int result;
+   unsigned char *tbuffer;
+   unsigned char flags;
+   unsigned char *sigpins;
+   int mode;
+
+   if (objc != 3) {
+      Tcl_SetResult(interp, "spi_csb_mode: Need device name and 0 or 1.\n", NULL);
+      return TCL_ERROR;
+   }
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
+      Tcl_SetResult(interp, "spi_speed:  No such device\n", NULL);
+      return TCL_ERROR;
+   }
+   else flags = ftRecord->flags;
+   sigpins = &(ftRecord->sigpins[0]);
+
+   result = Tcl_GetIntFromObj(interp, objv[2], &mode);
+   if (result != TCL_OK) return result;
+
+   switch (mode) {
+      case 0:
+	 ftRecord->flags &= ~CSB_NORAISE;
+
+	 // In addition to setting flags, raise CSB immediately.
+	 // So "spi_csb_mode 0" can be used to control when CSB
+	 // is deasserted.
+
+         tbuffer = (unsigned char *)malloc(sizeof(unsigned char));
+         tbuffer[0] = (unsigned char)sigpins[BB_CSB];
+
+         ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)1, &numWritten);
+         if (ftStatus != FT_OK)
+            Tcl_SetResult(interp, "Received error while writing SPI.\n", NULL);
+         else if (numWritten != (DWORD)1)
+            Tcl_SetResult(interp, "bitbang write:  short write error.\n", NULL);
+
+         free(tbuffer);
+	 break;
+
+      case 1:
+	 ftRecord->flags |= CSB_NORAISE;
+	 break;
+   }
    return TCL_OK;
 }
 
@@ -1406,6 +1478,7 @@ static cmdstruct ftdi_commands[] =
    {"ftdi::spi_read", (void *)ftditcl_spi_read},
    {"ftdi::spi_write", (void *)ftditcl_spi_write},
    {"ftdi::spi_speed", (void *)ftditcl_spi_speed},
+   {"ftdi::spi_csb_mode", (void *)ftditcl_spi_csb_mode},
    {"ftdi::spi_bitbang", (void *)ftditcl_spi_bitbang},
    {"ftdi::bitbang_read", (void *)ftditcl_bang_read},
    {"ftdi::bitbang_write", (void *)ftditcl_bang_write},
