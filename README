@@ -53,21 +53,48 @@ Package Tcl commands:
 	Set the speed of the interface (rate of SCK) to <value> (in MHz).
 	Maximum value is 30MHz.
 
-   ftdi::spi_read <devicename> <register> <num_bytes>
+   ftdi::spi_read <devicename> <command> <num_bytes>
 
-	Read SPI register <register>, which is <num_bytes> in length.
-	Protocol is determined by whether device was opened in -mps_mode
-	or not.
+	Send SPI command <command> and read back data of <num_bytes> in
+	length.  Protocol is determined by whether device was opened in
+	-mps_mode or -legacy or not.
 
-   ftdi::spi_write <devicename> <register> {<byte_list>...}
+   ftdi::spi_write <devicename> <command> {<byte_list>...}
 
-	Write list of bytes <byte_list>... to register <register>.  The
-	length of the byte list should match the expected number of bytes
-	in the register.
+	Send SPI command <command> and write list of bytes <byte_list>...
+	to the register specified by the command word.
+
+   ftdi::spi_readwrite <devicename> <command> {<byte_list>...}
+
+	Send SPI command <command> and write list of bytes <byte_list>...
+	to the register specified by the command word.  Read back data
+	of the same length as <byte_list>.
+
+   ftdi::spi_command <bits>
+
+	Set the SPI command word to be <bits> bits in length, where <bits>
+	may be zero to 64.  In normal MSSPE (not bit-bang) mode, <bits>
+	must be a multiple of 8.
 
    ftdi::closedev <devicename>
 
 	Close the communication channel to the FTDI device <devicename>.
+
+   Additional functions are available for setting up a bit-bang mode
+   in any case for which the SPI data format does not fit into 8-bit
+   words (see complete online documentation).  All functions assume
+   a more or less universal protocol of a command word followed by
+   zero or more data words.
+
+   If device is opened with flag "-legacy", a fixed command word of
+   one byte is assumed, with the command in the upper 4 bits and a
+   register in the lower four bits.  The command bits are fixed
+   according to the function called.  Otherwise, the command length
+   defaults to 8 bits but can be set by "spi_command <bits>".  The
+   command word is completely specified in the arguments to
+   spi_read or spi_write, and it is the responsibility of the
+   caller to ensure that the command word matches the function
+   called.
 
 ---------------------------------------------------------
 Errata:
@@ -103,3 +130,5 @@ To Do:
    write(), open(), close(), and ioctl() calls.  Together with a properly
    programmed EEPROM, this will allow the device to be accessed by normal
    users.
+
+   Possibly this just means that libftdi should be used, not D2XX.

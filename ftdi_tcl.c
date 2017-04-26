@@ -26,8 +26,9 @@ typedef struct _FT_RECORD {
    FT_HANDLE ftHandle;
    char *description;
    unsigned char flags;
-   unsigned char wordwidth;	// For bit-bang mode
-   unsigned char sigpins[8];	// For bit-bang mode
+   unsigned char cmdwidth;	// Number bits for command word
+   unsigned char wordwidth;	// Bits per word for bit-bang mode
+   unsigned char sigpins[8];	// Signal pin assignments for bit-bang mode
 } FT_RECORD;
 
 /* Flag definitions */
@@ -36,6 +37,8 @@ typedef struct _FT_RECORD {
 				// different SCK edges.
 #define BITBANG_MODE 0x04	// Set bit-bang mode
 #define CSB_NORAISE  0x08	// CSB is not raised after read or write
+#define LEGACY_MODE  0x10	// Legacy mode has fixed values for
+				// opcode and supports 16 registers.
 
 Tcl_HashTable handletab;
 Tcl_Interp *ftdiinterp;
@@ -49,8 +52,11 @@ typedef unsigned char bool;
 #define false 0
 #define true 1
 
-static int verbose=1;
-static int ftdinum=-1;
+static int verbose = 1;
+static int ftdinum = -1;
+
+static int usb_vid = 0x0403;
+static int usb_pid = 0x60ff;
 
 /*--------------------------------------------------------------*/
 /* Support function "find_handle"				*/
@@ -100,6 +106,38 @@ find_record(char *devstr, FT_HANDLE *handleptr)
    return (FT_RECORD *)NULL;
 }
 
+/*--------------------------------------------------------------*/
+/* Tcl function "ftdi_setid"					*/
+/* Set the product and vendor IDs used by "ftdi_open".		*/
+/*--------------------------------------------------------------*/
+
+int
+ftditcl_setid(ClientData clientData,
+	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+{
+   int vid_val, pid_val;
+   Tcl_Obj *lobj;
+
+   if (objc <= 1) {
+     Tcl_SetResult(interp, "setid: Need product ID and optional vendor ID\n", NULL);
+     return TCL_ERROR;
+   }
+
+   Tcl_GetIntFromObj(interp, objv[1], &pid_val);
+   usb_pid = pid_val & 0xffff;
+
+   if (objc > 2) {
+      Tcl_GetIntFromObj(interp, objv[2], &vid_val);
+      usb_vid = vid_val & 0xffff;
+   }
+
+   lobj = Tcl_NewListObj(0, NULL);
+   Tcl_ListObjAppendElement(interp, lobj, Tcl_NewIntObj(usb_pid));
+   Tcl_ListObjAppendElement(interp, lobj, Tcl_NewIntObj(usb_vid));
+   Tcl_SetObjResult(interp, lobj);
+   return TCL_OK;
+}
+ 
 /*--------------------------------------------------------------*/
 /* Tcl function "ftdi_get"					*/
 /* Read status of byte values on device cbus			*/
@@ -174,6 +212,52 @@ ftditcl_verbose(ClientData clientData,
 
   verbose = level;
   return TCL_OK;
+}
+
+/*--------------------------------------------------------------*/
+/* Tcl function "ftdi::spi_command":  Set the word length of	*/
+/* the SPI command word, which can accomodate lengths other	*/
+/* than the default 8.	In bit-bang mode, the bit length is	*/
+/* arbitrary.  In MSSPE mode, the bit length must be a multiple	*/
+/* of 8.							*/
+/*--------------------------------------------------------------*/
+
+int
+ftditcl_spi_command(ClientData clientData,
+	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+{
+   FT_RECORD *ftRecord;
+   unsigned char flags;
+   int cmdwidth, result;
+
+   if (objc != 3) {
+      Tcl_SetResult(interp, "spi_command: Need handle and integer value.\n", NULL);
+      return TCL_ERROR;
+   }
+   ftRecord = find_record(Tcl_GetString(objv[1]), NULL);
+   if (ftRecord == (FT_RECORD *)NULL) {
+      Tcl_SetResult(interp, "spi_command:  No such device\n", NULL);
+      return TCL_ERROR;
+   }
+   else flags = ftRecord->flags;
+
+   if (flags & LEGACY_MODE) {
+      Tcl_SetResult(interp, "spi_command:  Cannot change command word "
+		"length in legacy mode\n", NULL);
+      return TCL_ERROR;
+   }
+
+   result = Tcl_GetIntFromObj(interp, objv[2], &cmdwidth);
+   if (result != TCL_OK) return result;
+
+   if (cmdwidth > 64) {
+      Tcl_SetResult(interp, "spi_command:  Command word "
+		"maximum length is 64 bits.\n", NULL);
+      return TCL_ERROR;
+   }
+
+   ftRecord->cmdwidth = cmdwidth;
+   return TCL_OK;
 }
 
 /*--------------------------------------------------------------*/
@@ -416,8 +500,10 @@ ftditcl_bang_write(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
    int result, nbytes;
-   int regnum, wordcount, i, j, value, tidx;
+   int wordcount, i, j, value, tidx;
+   Tcl_WideInt regnum;
    unsigned char wordwidth;
+   unsigned char cmdwidth;
    unsigned char flags;
    unsigned char *tbuffer;
    unsigned char *sigpins;
@@ -440,6 +526,7 @@ ftditcl_bang_write(ClientData clientData,
    }
    flags = ftRecord->flags;
    wordwidth = ftRecord->wordwidth;
+   cmdwidth = ftRecord->cmdwidth;
    sigpins = &(ftRecord->sigpins[0]);
 
    // If we're not in bit-bang mode, use the normal spi_write.
@@ -454,7 +541,7 @@ ftditcl_bang_write(ClientData clientData,
    // responsibility of the end-user to make sure that the opcode
    // matches the use of routine "read" or "write".
 
-   result = Tcl_GetIntFromObj(interp, objv[2], &regnum);
+   result = Tcl_GetWideIntFromObj(interp, objv[2], &regnum);
    if (result != TCL_OK) return result;
 
    vector = objv[3];
@@ -476,7 +563,7 @@ ftditcl_bang_write(ClientData clientData,
    // Create complete vector to write in synchronous bit-bang
    // mode.
 
-   nbytes = ((1 + wordcount) * wordwidth * 2) + 2;
+   nbytes = ((cmdwidth + wordcount * wordwidth) * 2) + 2;
    tbuffer = (unsigned char *)malloc(nbytes * sizeof(unsigned char));
    tidx = 0;
  
@@ -484,7 +571,7 @@ ftditcl_bang_write(ClientData clientData,
    tbuffer[tidx++] = (unsigned char)0;
 
    // Write command/register word
-   for (j = 0; j < wordwidth; j++) {
+   for (j = 0; j < cmdwidth; j++) {
       // input changes on falling edge of SCK
       tbuffer[tidx++] = (regnum & (1 << j)) ? sigpins[BB_SDI] : 0;
       tbuffer[tidx] = tbuffer[tidx - 1] | sigpins[BB_SCK];
@@ -624,10 +711,12 @@ ftditcl_bang_read(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
    int result, nbytes, numRead;
-   int regnum, wordcount, i, j, value, tidx;
+   int wordcount, i, j, value, tidx;
+   Tcl_WideInt regnum;
    unsigned char flags;
    unsigned char *tbuffer;
    unsigned char wordwidth;
+   unsigned char cmdwidth;
    unsigned char *sigpins;
    Tcl_Obj *vector, *lobj;
 
@@ -648,6 +737,7 @@ ftditcl_bang_read(ClientData clientData,
    }
    flags = ftRecord->flags;
    wordwidth = ftRecord->wordwidth;
+   cmdwidth = ftRecord->cmdwidth;
    sigpins = &(ftRecord->sigpins[0]);
 
    // If we're not in bit-bang mode, use the normal spi_read.
@@ -662,14 +752,14 @@ ftditcl_bang_read(ClientData clientData,
    // responsibility of the end-user to make sure that the opcode
    // matches the use of routine "read" or "write".
 
-   result = Tcl_GetIntFromObj(interp, objv[2], &regnum);
+   result = Tcl_GetWideIntFromObj(interp, objv[2], &regnum);
    if (result != TCL_OK) return result;
    result = Tcl_GetIntFromObj(interp, objv[3], &wordcount);
    if (result != TCL_OK) return result;
 
    // Create complete vector to write in synchronous bit-bang mode.
 
-   nbytes = ((1 + wordcount) * wordwidth * 2) + 2;
+   nbytes = ((cmdwidth + wordcount * wordwidth) * 2) + 2;
    tbuffer = (unsigned char *)malloc(nbytes * sizeof(unsigned char));
    tidx = 0;
  
@@ -885,9 +975,11 @@ ftditcl_spi_read(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
    int result;
-   int regnum, bytecount, i;
+   int bytecount, i;
+   int cmdcount;
+   Tcl_WideInt regnum;
    unsigned char *values;
-   unsigned char tbuffer[10];
+   unsigned char tbuffer[13];
    unsigned char flags;
    Tcl_Obj *vector;
 
@@ -898,7 +990,7 @@ ftditcl_spi_read(ClientData clientData,
    FT_STATUS ftStatus;
 
    if (objc != 4) {
-      Tcl_SetResult(interp, "spi_read: Need device name, register, "
+      Tcl_SetResult(interp, "spi_read: Need device name, command, "
 		"and byte count.\n", NULL);
       return TCL_ERROR;
    }
@@ -914,7 +1006,7 @@ ftditcl_spi_read(ClientData clientData,
       return result;
    }
 
-   result = Tcl_GetIntFromObj(interp, objv[2], &regnum);
+   result = Tcl_GetWideIntFromObj(interp, objv[2], &regnum);
    if (result != TCL_OK) return result;
    result = Tcl_GetIntFromObj(interp, objv[3], &bytecount);
    if (result != TCL_OK) return result;
@@ -925,14 +1017,20 @@ ftditcl_spi_read(ClientData clientData,
    tbuffer[0] = 0x80;        // Set Dbus
    tbuffer[1] = (flags & CS_INVERT) ? 0x00 : 0x08; // Assert CS
    tbuffer[2] = 0x0b;        // SCK, SDI, and CS are outputs
-
    tbuffer[3] = 0x11;     // Simple write command
    tbuffer[4] = 0x00;     // Length = 1;
    tbuffer[5] = 0x00;     // (High byte is zero)
    // Command to send is "read register" + register no.
-   tbuffer[6] = ((flags & MIXED_MODE) ? 0x20 : 0x80) + (unsigned char)regnum;
+   cmdcount = ftRecord->cmdwidth >> 3;
+   if (flags & LEGACY_MODE)
+      tbuffer[6] = ((flags & MIXED_MODE) ? 0x20 : 0x80) + (unsigned char)regnum;
+   else {
+      for (i = 0; i < cmdcount; i++) {
+	 tbuffer[6 + i] = (unsigned char)((regnum >> (i << 3)) & 0xff);
+      }
+   }
 
-   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)7, &numWritten);
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)(6 + cmdcount), &numWritten);
    if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while preparing SPI"
 		" read command.\n", NULL);
@@ -943,7 +1041,7 @@ ftditcl_spi_read(ClientData clientData,
    /* require time to access!  Write the first 10 bytes, pause, then	*/
    /* do the rest.							*/
 
-   if (regnum < 16) {
+   if ((flags & LEGACY_MODE) && (regnum < 16)) {
       usleep(10);		// 10us delay for SPI transmission
    }
 
@@ -989,7 +1087,9 @@ ftditcl_spi_write(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
    int result;
-   int regnum, bytecount, i, value;
+   int bytecount, i, value;
+   int cmdcount;
+   Tcl_WideInt regnum;
    unsigned char *values;
    unsigned char flags;
    Tcl_Obj *vector, *lobj;
@@ -1001,7 +1101,7 @@ ftditcl_spi_write(ClientData clientData,
 
    if (objc != 4) {
       Tcl_SetResult(interp, "spi_write: Need device name, "
-		"register, and vector of values.\n", NULL);
+		"command, and vector of values.\n", NULL);
       return TCL_ERROR;
    }
    ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
@@ -1016,7 +1116,7 @@ ftditcl_spi_write(ClientData clientData,
       return result;
    }
 
-   result = Tcl_GetIntFromObj(interp, objv[2], &regnum);
+   result = Tcl_GetWideIntFromObj(interp, objv[2], &regnum);
    if (result != TCL_OK) return result;
 
    vector = objv[3];
@@ -1035,7 +1135,8 @@ ftditcl_spi_write(ClientData clientData,
       }
    }
 
-   values = (unsigned char *)malloc((7 + bytecount) * sizeof(unsigned char));
+   cmdcount = ftRecord->cmdwidth >> 3;
+   values = (unsigned char *)malloc((6 + cmdcount + bytecount) * sizeof(unsigned char));
 
    values[0] = 0x80;        // Set Dbus
    values[1] = (flags & CS_INVERT) ? 0x00 : 0x08; // Assert CS
@@ -1045,21 +1146,29 @@ ftditcl_spi_write(ClientData clientData,
    // Number of bytes to write (less 1)
    values[4] = (unsigned char)bytecount;
    values[5] = 0x00;        // (High byte is zero)
-   // Command to send is "write register" + register no.
-   values[6] = ((flags & MIXED_MODE) ? 0x10 : 0x40) + (unsigned char)regnum;
+   if (flags & LEGACY_MODE)
+      // Command to send is "write register" + register no.
+      values[6] = ((flags & MIXED_MODE) ? 0x10 : 0x40) + (unsigned char)regnum;
+   else {
+      for (i = 0; i < cmdcount; i++) {
+	 values[6 + i] = (unsigned char)((regnum >> (i << 3)) & 0xff);
+      }
+   }
+
+   ftStatus = FT_Write(ftHandle, values, (DWORD)(6 + cmdcount), &numWritten);
 
    for (i = 0; i < bytecount; i++) {
       result = Tcl_ListObjIndex(interp, vector, i, &lobj);
       result = Tcl_GetIntFromObj(interp, lobj, &value);
-      values[i + 7] = (unsigned char)(value & 0xff);
+      values[i + 6 + cmdcount] = (unsigned char)(value & 0xff);
    }
 
    // SPI write using MPSSE
 
-   ftStatus = FT_Write(ftHandle, values, (DWORD)(bytecount + 7), &numWritten);
+   ftStatus = FT_Write(ftHandle, values, (DWORD)(bytecount + cmdcount + 6), &numWritten);
    if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error in SPI write.\n", NULL);
-   else if (numWritten != (DWORD)(bytecount + 7))
+   else if (numWritten != (DWORD)(bytecount + cmdcount + 6))
       Tcl_SetResult(interp, "SPI short write error.\n", NULL);
 
    values[0] = 0x80;        // Set Dbus
@@ -1072,6 +1181,126 @@ ftditcl_spi_write(ClientData clientData,
    else if (numWritten != (DWORD)3)
       Tcl_SetResult(interp, "SPI short write error.\n", NULL);
 
+   free(values);
+   return TCL_OK;
+}
+
+/*--------------------------------------------------------------*/
+/* Tcl function "ftdi::spi_readwrite":	Combined read and write	*/
+/* (Note:  readwrite function untested, not sure how to do a	*/
+/* readback of data without sending more clocks.  FT functions	*/
+/* do not appear to be truly bidirectional/full duplex.)	*/
+/*--------------------------------------------------------------*/
+
+int
+ftditcl_spi_readwrite(ClientData clientData,
+	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+{
+   int result;
+   int bytecount, i;
+   int cmdcount;
+   Tcl_WideInt regnum;
+   Tcl_Obj *lobj;
+   int value;
+   unsigned char *values;
+   unsigned char tbuffer[13];
+   unsigned char flags;
+   Tcl_Obj *vector;
+
+   DWORD numWritten;
+   DWORD numRead;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
+
+   if (objc != 4) {
+      Tcl_SetResult(interp, "spi_readwrite: Need device name, command, "
+		"and byte list.\n", NULL);
+      return TCL_ERROR;
+   }
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
+      Tcl_SetResult(interp, "spi_readwrite:  No such device\n", NULL);
+      return TCL_ERROR;
+   }
+   else flags = ftRecord->flags;
+
+   result = Tcl_GetWideIntFromObj(interp, objv[2], &regnum);
+   if (result != TCL_OK) return result;
+
+   vector = objv[3];
+   result = Tcl_ListObjLength(interp, vector, &bytecount);
+   if (result != TCL_OK) return result;
+
+   for (i = 0; i < bytecount; i++) {
+      result = Tcl_ListObjIndex(interp, vector, i, &lobj);
+      if (result != TCL_OK) return result;
+      result = Tcl_GetIntFromObj(interp, lobj, &value);
+
+      if (value < 0 || value > 255) {
+         Tcl_SetResult(interp, "spi_write:  Byte value out of range 0-255\n",
+		NULL);
+	 return TCL_ERROR;
+      }
+   }
+
+   cmdcount = ftRecord->cmdwidth >> 3;
+   values = (unsigned char *)malloc((6 + cmdcount + bytecount) * sizeof(unsigned char));
+
+   // Write values to MPSSE to generate the SPI read command
+
+   values[0] = 0x80;        // Set Dbus
+   values[1] = (flags & CS_INVERT) ? 0x00 : 0x08; // Assert CS
+   values[2] = 0x0b;        // SCK, SDI, and CS are outputs
+   values[3] = 0x11;     // Simple write command
+   values[4] = 0x00;     // Length = 1;
+   values[5] = 0x00;     // (High byte is zero)
+   // Command to send is "read register" + register no.
+   cmdcount = ftRecord->cmdwidth >> 3;
+   if (flags & LEGACY_MODE)
+      values[6] = ((flags & MIXED_MODE) ? 0x20 : 0x80) + (unsigned char)regnum;
+   else {
+      for (i = 0; i < cmdcount; i++) {
+	 values[6 + i] = (unsigned char)((regnum >> (i << 3)) & 0xff);
+      }
+   }
+
+   ftStatus = FT_Write(ftHandle, values, (DWORD)(6 + cmdcount), &numWritten);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while preparing SPI"
+		" read command.\n", NULL);
+   else if (numWritten != (DWORD)7)
+      Tcl_SetResult(interp, "SPI readwrite:  short write error.\n", NULL);
+
+   values[0] = (flags & MIXED_MODE) ? 0x24 : 0x20;     // Simple read command
+   // Number bytes to read (less one)
+   values[1] = (unsigned char)(bytecount - 1);
+   values[2] = 0x00;     // (High byte is zero)
+ 
+   values[3] = 0x80;	// Set Dbus
+   values[4] = (flags & CS_INVERT) ? 0x08 : 0x00; // De-assert CS
+   values[5] = 0x0b;	// SCK, SDI, and CS are outputs
+
+   ftStatus = FT_Write(ftHandle, values, (DWORD)6, &numWritten);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while preparing SPI"
+		" read command.\n", NULL);
+   else if (numWritten != (DWORD)6)
+      Tcl_SetResult(interp, "SPI readwrite:  short write error.\n", NULL);
+
+   // SPI read using MPSSE
+
+   ftStatus = FT_Read(ftHandle, values, (DWORD)bytecount, &numRead);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error in SPI read.\n", NULL);
+   else if (numRead != (DWORD)bytecount)
+      Tcl_SetResult(interp, "SPI short read error.\n", NULL);
+
+   vector = Tcl_NewListObj(0, NULL);
+   for (i = 0; i < bytecount; i++) {
+      Tcl_ListObjAppendElement(interp, vector, Tcl_NewIntObj((int)values[i]));
+   }
+   Tcl_SetObjResult(interp, vector);
    free(values);
    return TCL_OK;
 }
@@ -1119,7 +1348,7 @@ ftditcl_list(ClientData clientData,
 //
 // Open an ftdi-usb device
 //
-// Usage:  ftdi_open [-invert|-mixed_mode] [<descriptor_string>]
+// Usage:  ftdi_open [-invert|-mixed_mode|-legacy] [<descriptor_string>]
 //
 // This routine will parse through the USB device entries for
 // one matching either "<descriptor_string>", if supplied, or
@@ -1166,20 +1395,29 @@ ftditcl_open(ClientData clientData,
    char tclhandle[32], *devstr, *swstr;
    unsigned char tbuffer[12], rbuffer[12];
 
-   // Check for "-invert" or "-mixed_mode" switches
+   // Check for "-invert", "-mixed_mode", or "-legacy" switches
+   // These must be at the beginning of the command.
+   flags = 0;
    argstart = 1;
-   if (objc > 1) {
+   while (objc > 1) {
       swstr = Tcl_GetString(objv[1]);
       if (!strncmp(swstr, "-inv", 4)) {
 	 objc--;
-	 argstart = 2;
-	 flags = CS_INVERT;
+	 argstart++;
+	 flags |= CS_INVERT;
       }
       else if (!strncmp(swstr, "-mixed", 4)) {
 	 objc--;
-	 argstart = 2;
-	 flags = MIXED_MODE;
+	 argstart++;
+	 flags |= MIXED_MODE;
       }
+      else if (!strncmp(swstr, "-legacy", 6)) {
+	 objc--;
+	 argstart++;
+	 flags |= LEGACY_MODE;
+      }
+      else
+	 break;
    }
 
    // Assume device channel A (devdflt0) unless otherwise specified
@@ -1189,7 +1427,7 @@ ftditcl_open(ClientData clientData,
       devstr = Tcl_GetString(objv[argstart]);
 
    // Allow the driver to handle our unique product code
-   ftStatus = FT_SetVIDPID((DWORD)0x0403, (DWORD)0x60ff);
+   ftStatus = FT_SetVIDPID((DWORD)usb_vid, (DWORD)usb_pid);
    if (ftStatus != FT_OK) {
       Fprintf(interp, stderr, "Unable to set extended device ID (error %d)\n",
 			(int)ftStatus);
@@ -1311,6 +1549,8 @@ ftditcl_open(ClientData clientData,
 	 ftRecordPtr->ftHandle = ftHandle;
 	 ftRecordPtr->description = strdup(infonode[devidx].Description);
 	 ftRecordPtr->flags = flags;
+	 ftRecordPtr->cmdwidth = 8;
+	 ftRecordPtr->wordwidth = 8;
 	 Tcl_SetHashValue(h, ftRecordPtr);
 	 result = TCL_OK;
       }
@@ -1477,7 +1717,9 @@ static cmdstruct ftdi_commands[] =
    {"ftdi::verbose", (void *)ftditcl_verbose},
    {"ftdi::spi_read", (void *)ftditcl_spi_read},
    {"ftdi::spi_write", (void *)ftditcl_spi_write},
+   {"ftdi::spi_readwrite", (void *)ftditcl_spi_readwrite},
    {"ftdi::spi_speed", (void *)ftditcl_spi_speed},
+   {"ftdi::spi_command", (void *)ftditcl_spi_command},
    {"ftdi::spi_csb_mode", (void *)ftditcl_spi_csb_mode},
    {"ftdi::spi_bitbang", (void *)ftditcl_spi_bitbang},
    {"ftdi::bitbang_read", (void *)ftditcl_bang_read},
@@ -1486,6 +1728,7 @@ static cmdstruct ftdi_commands[] =
    {"ftdi::bitbang_set", (void *)ftditcl_bang_set},
    {"ftdi::listdev", (void *)ftditcl_list},
    {"ftdi::opendev", (void *)ftditcl_open},
+   {"ftdi::setid", (void *)ftditcl_setid},
    {"ftdi::closedev", (void *)ftditcl_close},
    {"", NULL} /* sentinel */
 };
