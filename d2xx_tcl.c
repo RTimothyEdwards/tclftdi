@@ -1,8 +1,8 @@
 /*--------------------------------------------------------------*/
-/* This file to be used with the libftdi API			*/
+/* This file to be used with the D2XX library API		*/
 /*--------------------------------------------------------------*/
 
-#ifdef HAVE_LIBFTDI
+#ifdef HAVE_D2XX
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +14,7 @@
 #include <time.h>
 #include <dlfcn.h>
 
-#include <ftdi.h>
+#include <ftd2xx.h>
 #include <tcl.h>
 
 /* Forward declarations */
@@ -28,14 +28,14 @@ extern void Fprintf(Tcl_Interp *interp, FILE *f, char *format, ...);
 /* and use this as an alternative device identifier.		*/
 /*--------------------------------------------------------------*/
 
-typedef struct _ftdi_record {
-   struct ftdi_context *ftContext;
+typedef struct _FT_RECORD {
+   FT_HANDLE ftHandle;
    char *description;
    unsigned char flags;
    unsigned char cmdwidth;	// Number bits for command word
    unsigned char wordwidth;	// Bits per word for bit-bang mode
    unsigned char sigpins[8];	// Signal pin assignments for bit-bang mode
-} ftdi_record;
+} FT_RECORD;
 
 /* Flag definitions */
 #define CS_INVERT    0x01	// CS is sense-positive
@@ -72,44 +72,44 @@ static int usb_pid = 0x60ff;
 /*								*/
 /* Return the value of the device flags in "flagptr" (u_char).	*/
 /* Might be preferable to simply have a routine that returns	*/
-/* just the ftdi_record pointer.					*/
+/* just the FT_RECORD pointer.					*/
 /*--------------------------------------------------------------*/
 
-struct ftdi_context *
+FT_HANDLE
 find_handle(char *devstr, unsigned char *flagptr)
 {
    Tcl_HashEntry *h;
-   struct ftdi_context * ftContext;
-   ftdi_record *ftRecordPtr;
+   FT_HANDLE ftHandle;
+   FT_RECORD *ftRecordPtr;
 
    h = Tcl_FindHashEntry(&handletab, devstr);
    if (h != NULL) {
-      ftRecordPtr = (ftdi_record *)Tcl_GetHashValue(h);
+      ftRecordPtr = (FT_RECORD *)Tcl_GetHashValue(h);
       if (flagptr != NULL) *flagptr = ftRecordPtr->flags;
-      return ftRecordPtr->ftContext;
+      return ftRecordPtr->ftHandle;
    }
    if (flagptr != NULL) *flagptr = 0x0;
-   return (struct ftdi_context *)NULL;
+   return (FT_HANDLE)NULL;
 }
 
 /*--------------------------------------------------------------*/
 /* Similar to the above, but returns the record			*/
 /*--------------------------------------------------------------*/
 
-ftdi_record *
-find_record(char *devstr, struct ftdi_context **handleptr)
+FT_RECORD *
+find_record(char *devstr, FT_HANDLE *handleptr)
 {
    Tcl_HashEntry *h;
-   ftdi_record *ftRecordPtr;
+   FT_RECORD *ftRecordPtr;
 
    h = Tcl_FindHashEntry(&handletab, devstr);
    if (h != NULL) {
-      ftRecordPtr = (ftdi_record *)Tcl_GetHashValue(h);
-      if (handleptr != NULL) *handleptr = ftRecordPtr->ftContext;
+      ftRecordPtr = (FT_RECORD *)Tcl_GetHashValue(h);
+      if (handleptr != NULL) *handleptr = ftRecordPtr->ftHandle;
       return ftRecordPtr;
    }
    if (handleptr != NULL) *handleptr = NULL;
-   return (ftdi_record *)NULL;
+   return (FT_RECORD *)NULL;
 }
 
 /*--------------------------------------------------------------*/
@@ -124,15 +124,17 @@ ftditcl_setid(ClientData clientData,
    int vid_val, pid_val;
    Tcl_Obj *lobj;
 
-   if (objc > 1) {
+   if (objc <= 1) {
+     Tcl_SetResult(interp, "setid: Need product ID and optional vendor ID\n", NULL);
+     return TCL_ERROR;
+   }
 
-      Tcl_GetIntFromObj(interp, objv[1], &pid_val);
-      usb_pid = pid_val & 0xffff;
+   Tcl_GetIntFromObj(interp, objv[1], &pid_val);
+   usb_pid = pid_val & 0xffff;
 
-      if (objc > 2) {
-         Tcl_GetIntFromObj(interp, objv[2], &vid_val);
-         usb_vid = vid_val & 0xffff;
-      }
+   if (objc > 2) {
+      Tcl_GetIntFromObj(interp, objv[2], &vid_val);
+      usb_vid = vid_val & 0xffff;
    }
 
    lobj = Tcl_NewListObj(0, NULL);
@@ -156,19 +158,19 @@ ftditcl_get(ClientData clientData,
    unsigned char tbuffer[4];
    unsigned char rbuffer[4];
 
-   long numWritten;
-   long numRead;
-   ftdi_record *ftRecord;
-   struct ftdi_context * ftContext;
-   int ftStatus;
+   DWORD numWritten;
+   DWORD numRead;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
  
    if (objc <= 1) {
      Tcl_SetResult(interp, "get: Need device name\n", NULL);
      return TCL_ERROR;
    }
 
-   ftRecord = find_record(Tcl_GetString(objv[1]), &ftContext);
-   if (ftContext == (struct ftdi_context *)NULL) {
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "get:  No such device\n", NULL);
       return TCL_ERROR;
    }
@@ -176,16 +178,16 @@ ftditcl_get(ClientData clientData,
 
    tbuffer[0] = 0x83;		// Read high byte (i.e., Cbus)
 
-   ftStatus = ftdi_write_data(ftContext, tbuffer, 1);
-   if (ftStatus < 0)
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)1, &numWritten);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while reading Dbus\n", NULL);
-   else if (ftStatus != 1)
+   else if (numWritten != (DWORD)1)
       Tcl_SetResult(interp, "get:  short write error.\n", NULL);
 
-   ftStatus = ftdi_read_data(ftContext, rbuffer, 1);
-   if (ftStatus < 0)
+   ftStatus = FT_Read(ftHandle, rbuffer, (DWORD)1, &numRead);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while reading Dbus\n", NULL);
-   else if (ftStatus != 1)
+   else if (numRead != (DWORD)1)
       Tcl_SetResult(interp, "get:  short read error.\n", NULL);
 
    Tcl_SetObjResult(interp, Tcl_NewIntObj((int)rbuffer[0]));
@@ -230,7 +232,7 @@ int
 ftditcl_spi_command(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
-   ftdi_record *ftRecord;
+   FT_RECORD *ftRecord;
    unsigned char flags;
    int cmdwidth, result;
 
@@ -239,7 +241,7 @@ ftditcl_spi_command(ClientData clientData,
       return TCL_ERROR;
    }
    ftRecord = find_record(Tcl_GetString(objv[1]), NULL);
-   if (ftRecord == (ftdi_record *)NULL) {
+   if (ftRecord == (FT_RECORD *)NULL) {
       Tcl_SetResult(interp, "spi_command:  No such device\n", NULL);
       return TCL_ERROR;
    }
@@ -284,11 +286,11 @@ int
 ftditcl_spi_bitbang(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
-   ftdi_record *ftRecord;
-   struct ftdi_context * ftContext;
-   int ftStatus;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
 
-   long numWritten;
+   DWORD numWritten;
 
    int result, i, j, k;
    unsigned char *values;
@@ -304,8 +306,8 @@ ftditcl_spi_bitbang(ClientData clientData,
       Tcl_SetResult(interp, "spi_bitbang: Need device name and argument.\n", NULL);
       return TCL_ERROR;
    }
-   ftRecord = find_record(Tcl_GetString(objv[1]), &ftContext);
-   if (ftRecord == (ftdi_record *)NULL) {
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftRecord == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "spi_bitbang:  No such device\n", NULL);
       return TCL_ERROR;
    }
@@ -413,51 +415,45 @@ ftditcl_spi_bitbang(ClientData clientData,
    }
 
    // Reset the FTDI device
-   ftStatus = ftdi_usb_reset(ftContext);
-   if (ftStatus < 0)
+   ftStatus = FT_ResetDevice(ftHandle);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while resetting device.\n", NULL);
 
    // Set baudrate to default (Note: actual bits per second is 16 times the value)
    // So 62500 baud = 1Mbps.  However, SCK clock takes two transmissions (up, down)
    // so double this value to get a 1Mpbs SCK, or 125000.
-   ftStatus = ftdi_set_baudrate(ftContext, (long)125000);
-   if (ftStatus < 0)
+   ftStatus = FT_SetBaudRate(ftHandle, (DWORD)125000);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while setting baud rate.\n", NULL);
 
    // Set device to Synchronous bit-bang mode, with pins SCK, SDI, and CSB
    // set to output, SDO to input.
 
-   ftStatus = ftdi_set_bitmode(ftContext, (unsigned char)sigio, (unsigned char)0x04);
-   if (ftStatus < 0)
+   ftStatus = FT_SetBitMode(ftHandle, (UCHAR)sigio, (UCHAR)0x04);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while setting bit mode.\n", NULL);
 
-   ftStatus = ftdi_usb_purge_tx_buffer(ftContext);
-   if (ftStatus < 0)
-      Tcl_SetResult(interp, "Received error while purging transmit buffer.\n", NULL);
-
-   ftStatus = ftdi_usb_purge_rx_buffer(ftContext);
-   if (ftStatus < 0)
-      Tcl_SetResult(interp, "Received error while purging receive buffer.\n", NULL);
+   ftStatus = FT_Purge(ftHandle, FT_PURGE_RX | FT_PURGE_TX);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while purging device.\n", NULL);
 
    // Set latency timer (in ms) (legacy case is 16; FT2232 minimum 1)
-   ftStatus = ftdi_set_latency_timer(ftContext, (unsigned char)5);
-   if (ftStatus < 0)
+   ftStatus = FT_SetLatencyTimer(ftHandle, 5);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while setting latency timer.\n", NULL);
 
-   // Set timeouts (in ms) (no libftdi equivalent to D2XX FT_SetTimeouts()?)
-   /*
-   ftStatus = ftdi_set_timeouts(ftContext, 1000, 1000);
-   if (ftStatus < 0)
+   // Set timeouts (in ms)
+   ftStatus = FT_SetTimeouts(ftHandle, 1000, 1000);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while setting timeouts.\n", NULL);
-   */
 
    // Set default values CSB = 1, SDI = 0, SCK = 0, SDO = don't care
    tbuffer[0] = sigpins[BB_CSB];
 
-   ftStatus = ftdi_write_data(ftContext, tbuffer, 1);
-   if (ftStatus < 0)
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)1, &numWritten);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while writing init data\n", NULL);
-    else if (ftStatus != 1)
+    else if (numWritten != (DWORD)1)
       Tcl_SetResult(interp, "Short write error\n", NULL);
 
    // Return
@@ -474,7 +470,7 @@ int
 ftditcl_bang_word(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
-   ftdi_record *ftRecord;
+   FT_RECORD *ftRecord;
    unsigned char flags;
    int wordwidth, result;
 
@@ -483,7 +479,7 @@ ftditcl_bang_word(ClientData clientData,
       return TCL_ERROR;
    }
    ftRecord = find_record(Tcl_GetString(objv[1]), NULL);
-   if (ftRecord == (ftdi_record *)NULL) {
+   if (ftRecord == (FT_RECORD *)NULL) {
       Tcl_SetResult(interp, "bitbang_word:  No such device\n", NULL);
       return TCL_ERROR;
    }
@@ -519,18 +515,18 @@ ftditcl_bang_write(ClientData clientData,
    unsigned char *sigpins;
    Tcl_Obj *vector, *lobj;
 
-   long numWritten;
-   ftdi_record *ftRecord;
-   struct ftdi_context * ftContext;
-   int ftStatus;
+   DWORD numWritten;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
 
    if (objc != 4) {
       Tcl_SetResult(interp, "bitbang_write: Need device name, "
 		"register, and vector of values.\n", NULL);
       return TCL_ERROR;
    }
-   ftRecord = find_record(Tcl_GetString(objv[1]), &ftContext);
-   if (ftContext == (struct ftdi_context *)NULL) {
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "bitbang_write:  No such device\n", NULL);
       return TCL_ERROR;
    }
@@ -604,10 +600,10 @@ ftditcl_bang_write(ClientData clientData,
 		(unsigned char)sigpins[BB_CSB];
 
    // SPI write using bit bang
-   ftStatus = ftdi_write_data(ftContext, tbuffer, nbytes);
-   if (ftStatus < 0)
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)nbytes, &numWritten);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while writing SPI.\n", NULL);
-   else if (ftStatus != nbytes)
+   else if (numWritten != (DWORD)nbytes)
       Tcl_SetResult(interp, "bitbang write:  short write error.\n", NULL);
 
    free(tbuffer);
@@ -635,18 +631,18 @@ ftditcl_bang_set(ClientData clientData,
    unsigned char *sigpins;
    Tcl_Obj *vector, *lobj;
 
-   long numWritten;
-   ftdi_record *ftRecord;
-   struct ftdi_context * ftContext;
-   int ftStatus;
+   DWORD numWritten;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
 
    if (objc < 2) {
       Tcl_SetResult(interp, "bitbang_set: Need device name and at least "
 		"one pin and value pair.\n", NULL);
       return TCL_ERROR;
    }
-   ftRecord = find_record(Tcl_GetString(objv[1]), &ftContext);
-   if (ftContext == (struct ftdi_context *)NULL) {
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "bitbang_set:  No such device\n", NULL);
       return TCL_ERROR;
    }
@@ -702,10 +698,10 @@ ftditcl_bang_set(ClientData clientData,
    // Fprintf(interp, stderr, "Writing %d bytes\n", nbytes);
 
    // Simple bit bang write
-   ftStatus = ftdi_write_data(ftContext, tbuffer, nbytes);
-   if (ftStatus < 0)
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)nbytes, &numWritten);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while banging bits.\n", NULL);
-   else if (ftStatus != nbytes)
+   else if (numWritten != (DWORD)nbytes)
       Tcl_SetResult(interp, "bitbang set:  short write error.\n", NULL);
 
    free(tbuffer);
@@ -730,18 +726,18 @@ ftditcl_bang_read(ClientData clientData,
    unsigned char *sigpins;
    Tcl_Obj *vector, *lobj;
 
-   long numWritten;
-   ftdi_record *ftRecord;
-   struct ftdi_context * ftContext;
-   int ftStatus;
+   DWORD numWritten;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
 
    if (objc != 4) {
       Tcl_SetResult(interp, "bitbang_read: Need device name, "
 		"register, and word count.\n", NULL);
       return TCL_ERROR;
    }
-   ftRecord = find_record(Tcl_GetString(objv[1]), &ftContext);
-   if (ftContext == (struct ftdi_context *)NULL) {
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "bitbang_read:  No such device\n", NULL);
       return TCL_ERROR;
    }
@@ -797,22 +793,22 @@ ftditcl_bang_read(ClientData clientData,
 		(unsigned char)sigpins[BB_CSB];
 
    // Purge read buffer
-   ftStatus = ftdi_usb_purge_rx_buffer(ftContext);
-   if (ftStatus < 0)
+   ftStatus = FT_Purge(ftHandle, (DWORD)FT_PURGE_RX);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while purging SPI RX.\n", NULL);
 
    // SPI write using bit bang
-   ftStatus = ftdi_write_data(ftContext, tbuffer, nbytes);
-   if (ftStatus < 0)
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)nbytes, &numWritten);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while writing SPI.\n", NULL);
-   else if (ftStatus != nbytes)
+   else if (numWritten != (DWORD)nbytes)
       Tcl_SetResult(interp, "SPI write:  short write error.\n", NULL);
 
    // SPI read using bit bang
-   ftStatus = ftdi_read_data(ftContext, tbuffer, nbytes);
-   if (ftStatus < 0)
+   ftStatus = FT_Read(ftHandle, tbuffer, (DWORD)nbytes, &numRead);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while reading SPI.\n", NULL);
-   else if (ftStatus != nbytes)
+   else if (numRead != (DWORD)nbytes)
       Tcl_SetResult(interp, "SPI read:  short read error.\n", NULL);
 
    vector = Tcl_NewListObj(0, NULL);
@@ -848,11 +844,11 @@ int
 ftditcl_spi_csb_mode(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
-   ftdi_record *ftRecord;
-   struct ftdi_context * ftContext;
-   int ftStatus;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
 
-   long numWritten;
+   DWORD numWritten;
 
    int result;
    unsigned char *tbuffer;
@@ -864,8 +860,8 @@ ftditcl_spi_csb_mode(ClientData clientData,
       Tcl_SetResult(interp, "spi_csb_mode: Need device name and 0 or 1.\n", NULL);
       return TCL_ERROR;
    }
-   ftRecord = find_record(Tcl_GetString(objv[1]), &ftContext);
-   if (ftContext == (struct ftdi_context *)NULL) {
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "spi_speed:  No such device\n", NULL);
       return TCL_ERROR;
    }
@@ -886,10 +882,10 @@ ftditcl_spi_csb_mode(ClientData clientData,
          tbuffer = (unsigned char *)malloc(sizeof(unsigned char));
          tbuffer[0] = (unsigned char)sigpins[BB_CSB];
 
-         ftStatus = ftdi_write_data(ftContext, tbuffer, 1);
-         if (ftStatus < 0)
+         ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)1, &numWritten);
+         if (ftStatus != FT_OK)
             Tcl_SetResult(interp, "Received error while writing SPI.\n", NULL);
-         else if (ftStatus != 1)
+         else if (numWritten != (DWORD)1)
             Tcl_SetResult(interp, "bitbang write:  short write error.\n", NULL);
 
          free(tbuffer);
@@ -911,11 +907,11 @@ int
 ftditcl_spi_speed(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
-   ftdi_record *ftRecord;
-   struct ftdi_context * ftContext;
-   int ftStatus;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
 
-   long numWritten;
+   DWORD numWritten;
 
    int result;
    unsigned char *values;
@@ -928,8 +924,8 @@ ftditcl_spi_speed(ClientData clientData,
       Tcl_SetResult(interp, "spi_speed: Need device name and value (in MHz).\n", NULL);
       return TCL_ERROR;
    }
-   ftRecord = find_record(Tcl_GetString(objv[1]), &ftContext);
-   if (ftContext == (struct ftdi_context *)NULL) {
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "spi_speed:  No such device\n", NULL);
       return TCL_ERROR;
    }
@@ -939,8 +935,8 @@ ftditcl_spi_speed(ClientData clientData,
    if (result != TCL_OK) return result;
 
    if (flags & BITBANG_MODE) {
-      ftStatus = ftdi_set_baudrate(ftContext, (long)125000);
-      if (ftStatus < 0) {
+      ftStatus = FT_SetBaudRate(ftHandle, (DWORD)125000);
+      if (ftStatus != FT_OK) {
 	 Tcl_SetResult(interp, "Received error while setting baud rate.\n", NULL);
 	 return TCL_ERROR;
       }
@@ -949,8 +945,8 @@ ftditcl_spi_speed(ClientData clientData,
       // * 16, but SCK takes two transmissions (up, down), so SCK rate is
       // the baud rate * 8.
 
-      ftStatus = ftdi_set_baudrate(ftContext, (long)((mhz / 8.0) * 1.0E6));
-      if (ftStatus < 0) {
+      ftStatus = FT_SetBaudRate(ftHandle, (DWORD)((mhz / 8.0) * 1.0E6));
+      if (ftStatus != FT_OK) {
          Tcl_SetResult(interp, "Received error while setting baud rate.\n", NULL);
 	 return TCL_ERROR;
       }
@@ -966,11 +962,11 @@ ftditcl_spi_speed(ClientData clientData,
    tbuffer[2] = ival & 0xff;
    tbuffer[3] = (ival >> 8) & 0xff;
 
-   ftStatus = ftdi_write_data(ftContext, tbuffer, 4);
-   if (ftStatus < 0)
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)4, &numWritten);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while setting SPI"
 		" clock speed.\n", NULL);
-   else if (ftStatus != 4)
+   else if (numWritten != (DWORD)4)
       Tcl_SetResult(interp, "SPI read:  short write error.\n", NULL);
 
    return TCL_OK;
@@ -993,19 +989,19 @@ ftditcl_spi_read(ClientData clientData,
    unsigned char flags;
    Tcl_Obj *vector;
 
-   long numWritten;
-   long numRead;
-   ftdi_record *ftRecord;
-   struct ftdi_context * ftContext;
-   int ftStatus;
+   DWORD numWritten;
+   DWORD numRead;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
 
    if (objc != 4) {
       Tcl_SetResult(interp, "spi_read: Need device name, command, "
 		"and byte count.\n", NULL);
       return TCL_ERROR;
    }
-   ftRecord = find_record(Tcl_GetString(objv[1]), &ftContext);
-   if (ftContext == (struct ftdi_context *)NULL) {
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "spi_read:  No such device\n", NULL);
       return TCL_ERROR;
    }
@@ -1040,11 +1036,11 @@ ftditcl_spi_read(ClientData clientData,
       }
    }
 
-   ftStatus = ftdi_write_data(ftContext, tbuffer, 6 + cmdcount);
-   if (ftStatus < 0)
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)(6 + cmdcount), &numWritten);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while preparing SPI"
 		" read command.\n", NULL);
-   else if (ftStatus != 7)
+   else if (numWritten != (DWORD)7)
       Tcl_SetResult(interp, "SPI read:  short write error.\n", NULL);
 
    /* This hack applies only to the DPLL demo board---SPI registers	*/
@@ -1064,19 +1060,19 @@ ftditcl_spi_read(ClientData clientData,
    tbuffer[4] = (flags & CS_INVERT) ? 0x08 : 0x00; // De-assert CS
    tbuffer[5] = 0x0b;	// SCK, SDI, and CS are outputs
 
-   ftStatus = ftdi_write_data(ftContext, tbuffer, 6);
-   if (ftStatus < 0)
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)6, &numWritten);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while preparing SPI"
 		" read command.\n", NULL);
-   else if (ftStatus != 6)
+   else if (numWritten != (DWORD)6)
       Tcl_SetResult(interp, "SPI read:  short write error.\n", NULL);
 
    // SPI read using MPSSE
 
-   ftStatus = ftdi_read_data(ftContext, values, bytecount);
-   if (ftStatus < 0)
+   ftStatus = FT_Read(ftHandle, values, (DWORD)bytecount, &numRead);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error in SPI read.\n", NULL);
-   else if (ftStatus != bytecount)
+   else if (numRead != (DWORD)bytecount)
       Tcl_SetResult(interp, "SPI short read error.\n", NULL);
 
    vector = Tcl_NewListObj(0, NULL);
@@ -1104,18 +1100,18 @@ ftditcl_spi_write(ClientData clientData,
    unsigned char flags;
    Tcl_Obj *vector, *lobj;
 
-   long numWritten;
-   ftdi_record *ftRecord;
-   struct ftdi_context * ftContext;
-   int ftStatus;
+   DWORD numWritten;
+   FT_RECORD *ftRecord;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
 
    if (objc != 4) {
       Tcl_SetResult(interp, "spi_write: Need device name, "
 		"command, and vector of values.\n", NULL);
       return TCL_ERROR;
    }
-   ftRecord = find_record(Tcl_GetString(objv[1]), &ftContext);
-   if (ftContext == (struct ftdi_context *)NULL) {
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftHandle);
+   if (ftHandle == (FT_HANDLE)NULL) {
       Tcl_SetResult(interp, "spi_read:  No such device\n", NULL);
       return TCL_ERROR;
    }
@@ -1165,7 +1161,7 @@ ftditcl_spi_write(ClientData clientData,
       }
    }
 
-   ftStatus = ftdi_write_data(ftContext, values, 6 + cmdcount);
+   ftStatus = FT_Write(ftHandle, values, (DWORD)(6 + cmdcount), &numWritten);
 
    for (i = 0; i < bytecount; i++) {
       result = Tcl_ListObjIndex(interp, vector, i, &lobj);
@@ -1175,142 +1171,22 @@ ftditcl_spi_write(ClientData clientData,
 
    // SPI write using MPSSE
 
-   ftStatus = ftdi_write_data(ftContext, values, bytecount + cmdcount + 6);
-   if (ftStatus < 0)
+   ftStatus = FT_Write(ftHandle, values, (DWORD)(bytecount + cmdcount + 6), &numWritten);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error in SPI write.\n", NULL);
-   else if (ftStatus != (bytecount + cmdcount + 6))
+   else if (numWritten != (DWORD)(bytecount + cmdcount + 6))
       Tcl_SetResult(interp, "SPI short write error.\n", NULL);
 
    values[0] = 0x80;        // Set Dbus
    values[1] = (flags & CS_INVERT) ? 0x08 : 0x00; // De-assert CS
    values[2] = 0x0b;        // SCK, SDI, and CS are outputs
 
-   ftStatus = ftdi_write_data(ftContext, values, 3);
-   if (ftStatus < 0)
+   ftStatus = FT_Write(ftHandle, values, (DWORD)3, &numWritten);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error in SPI write.\n", NULL);
-   else if (ftStatus != 3)
+   else if (numWritten != (DWORD)3)
       Tcl_SetResult(interp, "SPI short write error.\n", NULL);
 
-   free(values);
-   return TCL_OK;
-}
-
-/*--------------------------------------------------------------*/
-/* Tcl function "ftdi::spi_readwrite":	Combined read and write	*/
-/* (Note:  readwrite function untested, not sure how to do a	*/
-/* readback of data without sending more clocks.  FT functions	*/
-/* do not appear to be truly bidirectional/full duplex.)	*/
-/*--------------------------------------------------------------*/
-
-int
-ftditcl_spi_readwrite(ClientData clientData,
-	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
-{
-   int result;
-   int bytecount, i;
-   int cmdcount;
-   Tcl_WideInt regnum;
-   Tcl_Obj *lobj;
-   int value;
-   unsigned char *values;
-   unsigned char tbuffer[13];
-   unsigned char flags;
-   Tcl_Obj *vector;
-
-   long numWritten;
-   long numRead;
-   ftdi_record *ftRecord;
-   struct ftdi_context * ftContext;
-   int ftStatus;
-
-   if (objc != 4) {
-      Tcl_SetResult(interp, "spi_readwrite: Need device name, command, "
-		"and byte list.\n", NULL);
-      return TCL_ERROR;
-   }
-   ftRecord = find_record(Tcl_GetString(objv[1]), &ftContext);
-   if (ftContext == (struct ftdi_context *)NULL) {
-      Tcl_SetResult(interp, "spi_readwrite:  No such device\n", NULL);
-      return TCL_ERROR;
-   }
-   else flags = ftRecord->flags;
-
-   result = Tcl_GetWideIntFromObj(interp, objv[2], &regnum);
-   if (result != TCL_OK) return result;
-
-   vector = objv[3];
-   result = Tcl_ListObjLength(interp, vector, &bytecount);
-   if (result != TCL_OK) return result;
-
-   for (i = 0; i < bytecount; i++) {
-      result = Tcl_ListObjIndex(interp, vector, i, &lobj);
-      if (result != TCL_OK) return result;
-      result = Tcl_GetIntFromObj(interp, lobj, &value);
-
-      if (value < 0 || value > 255) {
-         Tcl_SetResult(interp, "spi_write:  Byte value out of range 0-255\n",
-		NULL);
-	 return TCL_ERROR;
-      }
-   }
-
-   cmdcount = ftRecord->cmdwidth >> 3;
-   values = (unsigned char *)malloc((6 + cmdcount + bytecount) * sizeof(unsigned char));
-
-   // Write values to MPSSE to generate the SPI read command
-
-   values[0] = 0x80;        // Set Dbus
-   values[1] = (flags & CS_INVERT) ? 0x00 : 0x08; // Assert CS
-   values[2] = 0x0b;        // SCK, SDI, and CS are outputs
-   values[3] = 0x11;     // Simple write command
-   values[4] = 0x00;     // Length = 1;
-   values[5] = 0x00;     // (High byte is zero)
-   // Command to send is "read register" + register no.
-   cmdcount = ftRecord->cmdwidth >> 3;
-   if (flags & LEGACY_MODE)
-      values[6] = ((flags & MIXED_MODE) ? 0x20 : 0x80) + (unsigned char)regnum;
-   else {
-      for (i = 0; i < cmdcount; i++) {
-	 values[6 + i] = (unsigned char)((regnum >> (i << 3)) & 0xff);
-      }
-   }
-
-   ftStatus = ftdi_write_data(ftContext, values, 6 + cmdcount);
-   if (ftStatus < 0)
-      Tcl_SetResult(interp, "Received error while preparing SPI"
-		" read command.\n", NULL);
-   else if (ftStatus != 7)
-      Tcl_SetResult(interp, "SPI readwrite:  short write error.\n", NULL);
-
-   values[0] = (flags & MIXED_MODE) ? 0x24 : 0x20;     // Simple read command
-   // Number bytes to read (less one)
-   values[1] = (unsigned char)(bytecount - 1);
-   values[2] = 0x00;     // (High byte is zero)
- 
-   values[3] = 0x80;	// Set Dbus
-   values[4] = (flags & CS_INVERT) ? 0x08 : 0x00; // De-assert CS
-   values[5] = 0x0b;	// SCK, SDI, and CS are outputs
-
-   ftStatus = ftdi_write_data(ftContext, values, 6);
-   if (ftStatus < 0)
-      Tcl_SetResult(interp, "Received error while preparing SPI"
-		" read command.\n", NULL);
-   else if (ftStatus != 6)
-      Tcl_SetResult(interp, "SPI readwrite:  short write error.\n", NULL);
-
-   // SPI read using MPSSE
-
-   ftStatus = ftdi_read_data(ftContext, values, bytecount);
-   if (ftStatus < 0)
-      Tcl_SetResult(interp, "Received error in SPI read.\n", NULL);
-   else if (ftStatus != bytecount)
-      Tcl_SetResult(interp, "SPI short read error.\n", NULL);
-
-   vector = Tcl_NewListObj(0, NULL);
-   for (i = 0; i < bytecount; i++) {
-      Tcl_ListObjAppendElement(interp, vector, Tcl_NewIntObj((int)values[i]));
-   }
-   Tcl_SetObjResult(interp, vector);
    free(values);
    return TCL_OK;
 }
@@ -1331,14 +1207,14 @@ ftditcl_list(ClientData clientData,
    Tcl_HashEntry *h;
    char *dname;
 
-   struct ftdi_context * ftContext;
-   ftdi_record *ftRecordPtr;
+   FT_HANDLE ftHandle;
+   FT_RECORD *ftRecordPtr;
  
    lobj = Tcl_NewListObj(0, NULL);
    h = Tcl_FirstHashEntry(&handletab, &hs);
    while (h != NULL) {
-      ftRecordPtr = (ftdi_record *)Tcl_GetHashValue(h);
-      if (ftRecordPtr != (ftdi_record *)NULL) {
+      ftRecordPtr = (FT_RECORD *)Tcl_GetHashValue(h);
+      if (ftRecordPtr != (FT_RECORD *)NULL) {
 	 lobj2 = Tcl_NewListObj(0, NULL);
          dname = Tcl_GetHashKey(&handletab, h);
 	 sobj = Tcl_NewStringObj(dname, -1);
@@ -1394,17 +1270,16 @@ ftditcl_open(ClientData clientData,
    static char devdflt2[] = "Dual RS232-HS B";
    static char devdflt3[] = "Dual RS232-HS A";
 
-   struct ftdi_context *ftContext, *ftLink;
-   int ftStatus;
-   ftdi_record *ftRecordPtr;
-   struct ftdi_device_list *infonode = NULL, *snode;
-   long numBytes;
-   long numWritten, numRead;
-   int devnum, new, argstart, result;
+   FT_HANDLE ftHandle, *ftLink;
+   FT_STATUS ftStatus;
+   FT_RECORD *ftRecordPtr;
+   FT_DEVICE_LIST_INFO_NODE *infonode;
+   DWORD numDevs, numBytes;
+   DWORD numWritten, numRead;
+   int devnum, new, devidx, argstart, result;
    unsigned char flags = 0x0;
    char tclhandle[32], *devstr, *swstr;
    unsigned char tbuffer[12], rbuffer[12];
-   char descr[100];
 
    // Check for "-invert", "-mixed_mode", or "-legacy" switches
    // These must be at the beginning of the command.
@@ -1431,110 +1306,100 @@ ftditcl_open(ClientData clientData,
 	 break;
    }
 
-   // Create and initialize a new context
-   ftContext = ftdi_new();
-
    // Assume device channel A (devdflt0) unless otherwise specified
    if (objc < 2)
       devstr = devdflt0;
    else
       devstr = Tcl_GetString(objv[argstart]);
 
+   // Allow the driver to handle our unique product code
+   ftStatus = FT_SetVIDPID((DWORD)usb_vid, (DWORD)usb_pid);
+   if (ftStatus != FT_OK) {
+      Fprintf(interp, stderr, "Unable to set extended device ID (error %d)\n",
+			(int)ftStatus);
+      return TCL_ERROR;
+   }
+
    // Generate a list of USB devices and check for match with the
    // description string.
 
-   ftStatus = ftdi_usb_find_all(ftContext, &infonode, usb_vid, usb_pid);
-   if (ftStatus < 0) {
+   ftStatus = FT_CreateDeviceInfoList(&numDevs);
+   if (ftStatus != FT_OK) {
       Tcl_SetResult(interp, "Unable to list devices.\n", NULL);
       return TCL_ERROR;
    }
-   else if (infonode == NULL) {
+   else if (numDevs == 0) {
       Tcl_SetResult(interp, "There are no FTDI devices present.\n", NULL);
       return TCL_ERROR;
    }
 
+   infonode = (FT_DEVICE_LIST_INFO_NODE *)malloc(numDevs *
+		sizeof(FT_DEVICE_LIST_INFO_NODE));
+   ftStatus = FT_GetDeviceInfoList(infonode, &numDevs);
 
-   for (snode = infonode; snode; snode = snode->next) {
-      ftdi_usb_get_strings(ftContext, snode->dev, NULL, 0, descr, 100, NULL, 0);
-      if (!strcmp(descr, devstr))
+   for (devidx = 0; devidx < numDevs; devidx++) {
+      if (!strcmp(infonode[devidx].Description, devstr))
 	 break;
    }
-
-   if ((snode == NULL) && ((devstr == devdflt0) || (devstr == devdflt1))) {
+   if ((devidx == (int)numDevs) && ((devstr == devdflt0) || (devstr == devdflt1))) {
       // Try the other default (i.e., unprogrammed EPROM). . .
       devstr = devdflt2;
 
-      for (snode = infonode; snode; snode = snode->next) {
-         ftdi_usb_get_strings(ftContext, snode->dev, NULL, 0, descr, 100, NULL, 0);
-         if (!strcmp(descr, devstr))
+      for (devidx = 0; devidx < numDevs; devidx++) {
+         if (!strcmp(infonode[devidx].Description, devstr))
 	    break;
       }
    }
 
-   if (snode == NULL) {
+   if (devidx == (int)numDevs) {
       // Tcl_SetResult(interp, "No device matches description.\n", NULL);
       Tcl_Obj *lobj, *sobj;
 
       lobj = Tcl_NewListObj(0, NULL);
-      for (snode = infonode; snode; snode = snode->next) {
-         ftdi_usb_get_strings(ftContext, snode->dev, NULL, 0, descr, 100, NULL, 0);
-	 sobj = Tcl_NewStringObj(descr, -1);
+      for (devidx = 0; devidx < numDevs; devidx++) {
+	 sobj = Tcl_NewStringObj(infonode[devidx].Description, -1);
          Tcl_ListObjAppendElement(interp, lobj, sobj);
       }
-
-      // If there is only one device, attempt to open it.  Otherwise,
-      // return a list of the description strings so that the user can
-      // try again with the one they're looking for.
-
-      if (infonode->next == NULL) {
-	 ftStatus = ftdi_usb_open_dev(ftContext, infonode->dev);
-      }
-      else {
-         Tcl_SetObjResult(interp, lobj);
-         ftdi_list_free(&infonode);
-         return TCL_OK;
-      }
+      Tcl_SetObjResult(interp, lobj);
+      free(infonode);
+      return TCL_OK;
    }
-   else
-      ftStatus = ftdi_usb_open_dev(ftContext, snode->dev);
 
-   if (ftStatus < 0) {
-      Tcl_SetResult(interp, "Unable to open device\n", NULL);
-      ftdi_list_free(&infonode);
+   ftStatus = FT_OpenEx(infonode[devidx].Description, FT_OPEN_BY_DESCRIPTION,
+		&ftHandle);
+
+   if (ftStatus != FT_OK) {
+      Tcl_SetResult(interp, "Unable to open device (need to rmmod ftdi_sio?)\n",
+			NULL);
+      free(infonode);
       return TCL_ERROR;
    }
    else {
       // Reset the FTDI device
-      ftStatus = ftdi_usb_reset(ftContext);
-      if (ftStatus < 0)
+      ftStatus = FT_ResetDevice(ftHandle);
+      if (ftStatus != FT_OK)
 	 Tcl_SetResult(interp, "Received error while resetting device.\n", NULL);
 
       // Set device to MPSSE mode, with bits 0, 1, and 3 set to output
       // (SCK, SDI, and CS).  All others (SDO and Dbus) are set to type input.
 
-      ftStatus = ftdi_set_bitmode(ftContext, (unsigned char)0x0b, (unsigned char)0x02);
-      if (ftStatus < 0)
+      ftStatus = FT_SetBitMode(ftHandle, (UCHAR)0x0b, (UCHAR)0x02);
+      if (ftStatus != FT_OK)
 	 Tcl_SetResult(interp, "Received error while setting bit mode.\n", NULL);
 
-      ftStatus = ftdi_usb_purge_tx_buffer(ftContext);
-      if (ftStatus < 0)
-	 Tcl_SetResult(interp, "Received error while purging transmit buffer.\n", NULL);
-
-      ftStatus = ftdi_usb_purge_rx_buffer(ftContext);
-      if (ftStatus < 0)
-	 Tcl_SetResult(interp, "Received error while purging receive buffer.\n", NULL);
+      ftStatus = FT_Purge(ftHandle, FT_PURGE_RX | FT_PURGE_TX);
+      if (ftStatus != FT_OK)
+	 Tcl_SetResult(interp, "Received error while purging device.\n", NULL);
 
       // Set latency timer (in ms) (legacy case is 16; FT2232 minimum 1)
-      ftStatus = ftdi_set_latency_timer(ftContext, (unsigned char)5);
-      if (ftStatus < 0)
+      ftStatus = FT_SetLatencyTimer(ftHandle, 5);
+      if (ftStatus != FT_OK)
 	 Tcl_SetResult(interp, "Received error while setting latency timer.\n", NULL);
 
       // Set timeouts (in ms)
-      /*
-      ftStatus = ftdi_set_timeouts(ftContext, 1000, 1000);
-      if (ftStatus < 0)
+      ftStatus = FT_SetTimeouts(ftHandle, 1000, 1000);
+      if (ftStatus != FT_OK)
 	 Tcl_SetResult(interp, "Received error while setting timeouts.\n", NULL);
-      */
 
       // MPSSE setup. . .
       tbuffer[0] = 0x80;        // Set Dbus
@@ -1552,23 +1417,23 @@ ftditcl_open(ClientData clientData,
       tbuffer[8] = 0x10;     	// Divide by 16
       tbuffer[9] = 0x00;        // (High byte is zero)
 
-      ftStatus = ftdi_write_data(ftContext, tbuffer, 10);
-      if (ftStatus < 0)
+      ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)10, &numWritten);
+      if (ftStatus != FT_OK)
          Tcl_SetResult(interp, "Received error while writing init data\n", NULL);
-      else if (ftStatus != 10)
+      else if (numWritten != (DWORD)10)
          Tcl_SetResult(interp, "Short write error\n", NULL);
 
       // Now assign a unique string handler to the device and associate it
-      // with the ftContext in a hash table.
+      // with the ftHandle in a hash table.
 
       devnum = ++ftdinum;
       sprintf(tclhandle, "ftdi%d", devnum);
 
       h = Tcl_CreateHashEntry(&handletab, (CONST char *)tclhandle, &new);
       if (new > 0) {
-	 ftRecordPtr = (ftdi_record *)malloc(sizeof(ftdi_record));
-	 ftRecordPtr->ftContext = ftContext;
-	 ftRecordPtr->description = strdup(descr);
+	 ftRecordPtr = (FT_RECORD *)malloc(sizeof(FT_RECORD));
+	 ftRecordPtr->ftHandle = ftHandle;
+	 ftRecordPtr->description = strdup(infonode[devidx].Description);
 	 ftRecordPtr->flags = flags;
 	 ftRecordPtr->cmdwidth = 8;
 	 ftRecordPtr->wordwidth = 8;
@@ -1577,7 +1442,7 @@ ftditcl_open(ClientData clientData,
       }
       else {
 	 Tcl_SetResult(interp, "open:  Name already defined\n", NULL);
-	 ftStatus = ftdi_usb_close(ftContext);
+	 ftStatus = FT_Close(ftHandle);
 	 return TCL_ERROR;
       }
       tobj = Tcl_NewStringObj(tclhandle, -1);
@@ -1593,35 +1458,35 @@ ftditcl_open(ClientData clientData,
 
       tbuffer[0] = 0xff;		// not a command
 
-      ftStatus = ftdi_write_data(ftContext, tbuffer, 1);
-      if (ftStatus < 0) {
+      ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)1, &numWritten);
+      if (ftStatus != FT_OK) {
          Fprintf(interp, stderr, "Received error while writing test data\n");
 	 result = TCL_ERROR;
       }
-      else if (ftStatus != 1) {
+      else if (numWritten != (DWORD)1) {
          Fprintf(interp, stderr, "Short write error on test data\n");
 	 result = TCL_ERROR;
       }
 
-      ftStatus = ftdi_read_data(ftContext, rbuffer, 2);
-      if (ftStatus < 0 || ftStatus != 2) {
+      ftStatus = FT_Read(ftHandle, rbuffer, (DWORD)2, &numRead);
+      if (ftStatus != FT_OK || numRead != 2) {
          Fprintf(interp, stderr, "Error message not received after invalid"
 			" command.\n");
 	 result = TCL_ERROR;
       }
-      ftdi_list_free(&infonode);
+      free(infonode);
 
       // Assert CS line
       tbuffer[0] = 0x80;
       tbuffer[1] = (ftRecordPtr->flags & CS_INVERT) ? 0x00 : 0x08;
       tbuffer[2] = 0x0b;
 
-      ftStatus = ftdi_write_data(ftContext, tbuffer, 3);
-      if (ftStatus < 0) {
+      ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)3, &numWritten);
+      if (ftStatus != FT_OK) {
          Fprintf(interp, stderr, "Received error while asserting CS.\n");
 	 result = TCL_ERROR;
       }
-      else if (ftStatus != 3) {
+      else if (numWritten != (DWORD)3) {
          Fprintf(interp, stderr, "Short write error while asserting CS\n");
 	 result = TCL_ERROR;
       }
@@ -1636,17 +1501,17 @@ ftditcl_open(ClientData clientData,
 
 int close_device(Tcl_Interp *interp, char *devname)
 {
-   struct ftdi_context * ftContext;
-   int ftStatus;
-   ftdi_record *ftRecordPtr;
-   long numWritten;
+   FT_HANDLE ftHandle;
+   FT_STATUS ftStatus;
+   FT_RECORD *ftRecordPtr;
+   DWORD numWritten;
    Tcl_HashSearch hs;
    Tcl_HashEntry *h;
    unsigned char flags;
    unsigned char tbuffer[12];
 
-   ftContext = find_handle(devname, &flags);
-   if (ftContext == (struct ftdi_context *)NULL) return TCL_ERROR;
+   ftHandle = find_handle(devname, &flags);
+   if (ftHandle == (FT_HANDLE)NULL) return TCL_ERROR;
 
    tbuffer[0] = 0x80;        // Set Dbus
    tbuffer[1] = (flags & CS_INVERT) ? 0x08 : 0x00;
@@ -1655,28 +1520,24 @@ int close_device(Tcl_Interp *interp, char *devname)
    tbuffer[4] = 0x00;
    tbuffer[5] = 0x00;
 
-   ftStatus = ftdi_write_data(ftContext, tbuffer, 6);
-   if (ftStatus < 0)
+   ftStatus = FT_Write(ftHandle, tbuffer, (DWORD)6, &numWritten);
+   if (ftStatus != FT_OK)
       Tcl_SetResult(interp, "Received error while preparing device for close.", NULL);
-   else if (ftStatus != 6)
+   else if (numWritten != (DWORD)6)
       Tcl_SetResult(interp, "Short write to device.", NULL);
 
-   ftStatus = ftdi_usb_purge_tx_buffer(ftContext);
-   if (ftStatus < 0)
-      Tcl_SetResult(interp, "Received error while purging transmit buffer.", NULL);
+   ftStatus = FT_Purge(ftHandle, FT_PURGE_RX | FT_PURGE_TX);
+   if (ftStatus != FT_OK)
+      Tcl_SetResult(interp, "Received error while purging device.", NULL);
 
-   ftStatus = ftdi_usb_purge_rx_buffer(ftContext);
-   if (ftStatus < 0)
-      Tcl_SetResult(interp, "Received error while purging receive buffer.", NULL);
-
-   ftStatus = ftdi_usb_close(ftContext);
-   if (ftStatus < 0) {
+   ftStatus = FT_Close(ftHandle);
+   if (ftStatus != FT_OK) {
       Tcl_SetResult(interp, "Received error while closing device.", NULL);
       return TCL_ERROR;
    }
    h = Tcl_FindHashEntry(&handletab, devname);
    if (h != (Tcl_HashEntry *)NULL) {
-      ftRecordPtr = (ftdi_record *)Tcl_GetHashValue(h);
+      ftRecordPtr = (FT_RECORD *)Tcl_GetHashValue(h);
       free(ftRecordPtr->description);
       free(ftRecordPtr);
       Tcl_DeleteHashEntry(h);
@@ -1698,14 +1559,14 @@ ftditcl_close(ClientData clientData,
    char *devname;
    int result;
 
-   struct ftdi_context * ftContext;
-   ftdi_record *ftRecordPtr;
+   FT_HANDLE ftHandle;
+   FT_RECORD *ftRecordPtr;
  
    if (objc == 1) {
       h = Tcl_FirstHashEntry(&handletab, &hs);
       while (h != NULL) {
-	 ftRecordPtr = (ftdi_record *)Tcl_GetHashValue(h);
-	 ftContext = ftRecordPtr->ftContext;
+	 ftRecordPtr = (FT_RECORD *)Tcl_GetHashValue(h);
+	 ftHandle = ftRecordPtr->ftHandle;
 
          devname = Tcl_GetHashKey(&handletab, h);
 	 result = close_device(interp, devname);
@@ -1742,7 +1603,6 @@ static cmdstruct ftdi_commands[] =
    {"ftdi::verbose", (void *)ftditcl_verbose},
    {"ftdi::spi_read", (void *)ftditcl_spi_read},
    {"ftdi::spi_write", (void *)ftditcl_spi_write},
-   {"ftdi::spi_readwrite", (void *)ftditcl_spi_readwrite},
    {"ftdi::spi_speed", (void *)ftditcl_spi_speed},
    {"ftdi::spi_command", (void *)ftditcl_spi_command},
    {"ftdi::spi_csb_mode", (void *)ftditcl_spi_csb_mode},
@@ -1863,4 +1723,4 @@ Tclftdi_Init(Tcl_Interp *interp)
    return TCL_OK;
 }
 
-#endif	/* HAVE_LIBFTDI */
+#endif 	/* HAVE_D2XX */

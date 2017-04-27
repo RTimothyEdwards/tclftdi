@@ -782,6 +782,177 @@ if test "x${FTDI_D2XX_LIB}" != "x" ; then
    LIB_SPECS="${LIB_SPECS} -L${FTDI_D2XX_LIB} -lrt -lftd2xx -ldl -lpthread"
 fi
 
+dnl-----------------------------------------------------------------
+dnl Path to libftdi distribution (alternative to d2XX)
+dnl-----------------------------------------------------------------
+
+AC_ARG_WITH(libftdi,
+[  --with-libftdi=DIR		path to libftdi], [
+   if test -d "$withval"; then
+      LIBFTDI_DIR=$withval
+   else
+      LIBFTDI_DIR=${PATH}
+   fi
+   AC_PATH_PROG(LIBFTDI_INCLUDE, ftdi.h, , $LIBFTDI_DIR)
+], [
+   AC_PATH_PROG(LIBFTDI_INCLUDE, ftdi.h, , )
+])
+
+dnl-----------------------------------------------------------------
+dnl Check for the libftdi library in the path of <DIR>
+dnl-----------------------------------------------------------------
+
+if test "x${LIBFTDI_DIR}" != "x" ; then
+   echo -n "searching for libftdi1.so in ${LIBFTDI_DIR}..."
+   case $target in
+      x86_64-*)
+	for dir in \
+	   ${LIBFTDI_DIR} \
+	   ${LIBFTDI_DIR}/lib64 \
+	   ${LIBFTDI_DIR}/lib
+	do
+	   if test -r "$dir/libftdi1.so" ; then
+	      LIBFTDI_LIB="$dir"
+	      break
+	   fi
+        done
+      ;;
+      *-linux|i686-*)
+	for dir in \
+	   ${LIBFTDI_DIR} \
+	   ${LIBFTDI_DIR}/lib64 \
+	   ${LIBFTDI_DIR}/lib
+	do
+	   if test -r "$dir/libftdi1.so" ; then
+	      LIBFTDI_LIB="$dir"
+	      break
+	   fi
+        done
+      ;;
+  esac
+else
+   AC_PATH_PROG(LIBFTDI_LIB, libftdi1.so, , )
+fi
+
+if test "x${LIBFTDI_LIB}" != "x" ; then
+   echo "yes"
+else
+   echo "no"
+fi
+
+dnl Path to LIBFTDI headers: ftdi.h
+dnl (if specified separately from library path)
+
+AC_ARG_WITH(libftdi_include,
+[  --with-libftdi_include=DIR		path to LIBFTDI headers], [
+   if test -d "$withval"; then
+      LIBFTDI_INC_DIR=$withval
+   elif test -f "$withval"; then
+      LIBFTDI_INC_DIR=${withval%/ftdi.h}
+   else
+      LIBFTDI_INC_DIR=${PATH}
+   fi
+   AC_PATH_PROG(LIBFTDI_INCLUDE, ftdi.h, , $LIBFTDI_INC_DIR)
+], [
+   AC_PATH_PROG(LIBFTDI_INCLUDE, ftdi.h, , )])
+
+dnl Path to LIBFTDI libraries: libftdi1.a, libftdi1.so.2
+dnl (if specified separately from include path)
+
+AC_ARG_WITH(libftdi_lib,
+[  --with-libftdi_lib=DIR		path to LIBFTDI object library], [
+   if test -d "$withval"; then
+      LIBFTDI_LIB_DIR=$withval
+   elif test -f "$withval"; then
+      LIBFTDI_LIB_DIR=${withval%/libftdi1.so}
+   else
+      LIBFTDI_LIB_DIR=${PATH}
+   fi
+], [])
+
+dnl-----------------------------------------------------------------
+dnl Check for the LIBFTDI headers in standard paths
+dnl-----------------------------------------------------------------
+
+if test "x${LIBFTDI_INCLUDE}" == "x" ; then
+      echo -n "Searching for ftdi.h in standard paths . . ."
+
+   for dir in \
+      ${LIBFTDI_INC_DIR} \
+      ${LIBFTDI_INC_DIR}/libftdi1 \
+      /usr/include \
+      /usr/local/include \
+      /usr/share/include \
+      /usr/include/libftdi1 \
+      /usr/local/include/libftdi1 \
+      /usr/share/include/libftdi1
+   do
+      if test -r "$dir/ftdi.h" ; then
+         LIBFTDI_INCLUDE="$dir"
+         break
+      fi
+   done
+
+   if test "x${LIBFTDI_INCLUDE}" != "x" ; then
+      echo "yes"
+   else
+      echo "no"
+   fi
+fi
+
+dnl-----------------------------------------------------------------
+dnl Check for the LIBFTDI library in the path of <DIR>
+dnl-----------------------------------------------------------------
+
+if test "x${LIBFTDI_LIB}" == "x" ; then
+      echo -n "Searching for libftdi1.so in standard paths . . ."
+
+      case $target in
+         x86_64-*)
+	   for dir in \
+	      ${LIBFTDI_LIB_DIR} \
+	      ${LIBFTDI_LIB_DIR}/lib \
+	      ${LIBFTDI_LIB_DIR}/lib64 \
+	      /usr/lib \
+	      /usr/lib64 \
+	      /usr/local/lib \
+	      /usr/local/lib64
+	   do
+	      if test -r "$dir/libftdi1.so" ; then
+	         LIBFTDI_LIB="$dir"
+	         break
+	      fi
+           done
+         ;;
+         *-linux)
+	   for dir in \
+	      ${LIBFTDI_LIB_DIR} \
+	      ${LIBFTDI_LIB_DIR}/lib \
+	      /usr/lib \
+	      /usr/local/lib
+	   do
+	      if test -r "$dir/libftdi1.so" ; then
+	         LIBFTDI_LIB="$dir"
+	         break
+	      fi
+           done
+         ;;
+     esac
+
+     if test "x${LIBFTDI_LIB}" != "x" ; then
+        echo "yes"
+     else
+        echo "no"
+     fi
+fi
+
+if test "x${LIBFTDI_INCLUDE}" != "x" ; then
+   INC_SPECS="${INC_SPECS} -I${LIBFTDI_INCLUDE%/ftdi.h}"
+fi
+
+if test "x${LIBFTDI_LIB}" != "x" ; then
+   LIB_SPECS="${LIB_SPECS} -L${LIBFTDI_LIB} -lrt -lftdi1 -ldl -lpthread"
+fi
 dnl Target library location
 
 AC_ARG_WITH(libdir,
@@ -926,8 +1097,6 @@ AC_SUBST(INSTALL_DATA)
 
 AC_SUBST(MKDIR)
 
-AC_OUTPUT(Makefile)
-
 echo ""
 echo "Configuration results:"
 echo "----------------------------------------------------"
@@ -948,16 +1117,53 @@ else
    echo "Using Tk headers at: ${TK_INC_DIR}"
 fi
 
-if test "x${FTDI_D2XX_INCLUDE}" == "x"; then
-   echo "ERROR: FTDI D2XX headers not found.  Use --with-d2XX=<DIR>"
-else
-   echo "Using FTDI D2XX headers at: ${FTDI_D2XX_INCLUDE}"
+if test "x${LIBFTDI_LIB}" != "x" ; then
+   if test "x${LIBFTDI_INCLUDE}" == "x"; then
+      if test "x${FTDI_D2XX_INCLUDE}" == "x"; then
+         echo "ERROR: LIBFTDI headers not found.  Use --with-libftdi=<DIR>"
+      fi
+   else
+      echo "Using LIBFTDI headers at: ${LIBFTDI_INCLUDE}"
+      AC_DEFINE(HAVE_LIBFTDI)
+   fi
+
+   if test "x${LIBFTDI_LIB}" == "x"; then
+      if test "x${FTDI_D2XX_LIB}" == "x"; then
+         echo "ERROR: LIBFTDI library not found.  Use --with-libftdi=<DIR>"
+      fi
+   else
+      echo "Using LIBFTDI library at: ${LIBFTDI_LIB}"
+      AC_DEFINE(HAVE_LIBFTDI)
+   fi
 fi
 
-if test "x${FTDI_D2XX_LIB}" == "x"; then
-   echo "ERROR: FTDI D2XX libraries not found.  Use --with-d2XX=<DIR>"
-else
-   echo "Using FTDI D2XX headers at: ${FTDI_D2XX_LIB}"
+if test "x${FTDI_D2XX_LIB}" != "x" ; then
+   if test "x${FTDI_D2XX_INCLUDE}" == "x"; then
+      if test "x${LIBFTDI_INCLUDE}" == "x"; then
+         echo "ERROR: FTDI D2XX headers not found.  Use --with-ftdi-d2xx=<DIR>"
+      fi
+   else
+      echo "Using FTDI D2XX headers at: ${FTDI_D2XX_INCLUDE}"
+      AC_DEFINE(HAVE_D2XX)
+   fi
+
+   if test "x${FTDI_D2XX_LIB}" == "x"; then
+      if test "x${LIBFTDI_LIB}" == "x"; then
+         echo "ERROR: FTDI D2XX library not found.  Use --with-ftdi-d2xx=<DIR>"
+      fi
+   else
+      echo "Using FTDI D2XX library at: ${LIBFTDI_LIB}"
+      AC_DEFINE(HAVE_D2XX)
+   fi
+fi
+
+if test "x${LIBFTDI_LIB}" != "x" -a "x${FTDI_D2XX_LIB}" != "x"; then
+   echo "ERROR:  Cannot use libraries for both libftdi and d2XX!"
+fi
+if test "x${LIBFTDI_INCLUDE}" != "x" -a "x${FTDI_D2XX_INCLUDE}" != "x"; then
+   echo "ERROR:  Cannot use include files for both libftdi and d2XX!"
 fi
 
 echo "----------------------------------------------------"
+
+AC_OUTPUT(Makefile)

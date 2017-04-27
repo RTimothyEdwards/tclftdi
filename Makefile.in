@@ -28,7 +28,6 @@ WISH_EXE = @WISH_EXE@
 LIB_SPECS = @LIB_SPECS@
 INC_SPECS = @INC_SPECS@
 
-FTDI_SRCS = ftdi_tcl.c
 FTDI_OBJS = ftdi_tcl.o
 FTDI_HDRS = 
 
@@ -65,9 +64,9 @@ tclftdi${SHDLIB_EXT}: ${FTDI_OBJS} symbol.map
 		${SHLIB_LIB_SPECS} ${LDFLAGS} ${EXTRA_LIBS} ${LIBS} \
 		${LIB_SPECS} ${EXTRA_LIB_SPECS}
 
-ftdi_tcl.o: ftdi_tcl.c
+ftdi_tcl.o: ftdi_tcl.c d2xx_tcl.c
 	$(RM) ftdi_tcl.o
-	$(CC) ${CPPFLAGS} ${CFLAGS} ${DEFS} $(PATHNAMES) $(INCLUDES) \
+	$(CC) ${CPPFLAGS} ${CFLAGS} ${DEFS} ${FTDIDEFS} $(PATHNAMES) $(INCLUDES) \
 		$(INC_SPECS) ftdi_tcl.c -c -o ftdi_tcl.o
 
 install:

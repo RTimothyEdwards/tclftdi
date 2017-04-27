@@ -637,6 +637,8 @@ SHLIB_LD
 SHDLIB_EXT
 TCLFTDI_LIB_DIR
 TCLFTDI_BIN_DIR
+LIBFTDI_LIB
+LIBFTDI_INCLUDE
 FTDI_D2XX_LIB
 FTDI_D2XX_INCLUDE
 EGREP
@@ -722,6 +724,9 @@ with_tklibs
 with_d2XX
 with_d2XX_include
 with_d2XX_lib
+with_libftdi
+with_libftdi_include
+with_libftdi_lib
 with_libdir
 with_bindir
 '
@@ -1366,6 +1371,9 @@ Optional Packages:
   --with-d2XX=DIR		path to FTDI d2XX
   --with-d2XX_include=DIR		path to FTDI d2XX headers
   --with-d2XX_lib=DIR		path to FTDI d2XX object library
+  --with-libftdi=DIR		path to libftdi
+  --with-libftdi_include=DIR		path to LIBFTDI headers
+  --with-libftdi_lib=DIR		path to LIBFTDI object library
   --with-libdir=DIR			path to libftdi runtime files
   --with-bindir=DIR			path to libftdi launch script
 
@@ -4889,6 +4897,372 @@ fi
 
 
 
+# Check whether --with-libftdi was given.
+if test "${with_libftdi+set}" = set; then :
+  withval=$with_libftdi;
+   if test -d "$withval"; then
+      LIBFTDI_DIR=$withval
+   else
+      LIBFTDI_DIR=${PATH}
+   fi
+   # Extract the first word of "ftdi.h", so it can be a program name with args.
+set dummy ftdi.h; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_LIBFTDI_INCLUDE+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $LIBFTDI_INCLUDE in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_LIBFTDI_INCLUDE="$LIBFTDI_INCLUDE" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $LIBFTDI_DIR
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_LIBFTDI_INCLUDE="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+LIBFTDI_INCLUDE=$ac_cv_path_LIBFTDI_INCLUDE
+if test -n "$LIBFTDI_INCLUDE"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $LIBFTDI_INCLUDE" >&5
+$as_echo "$LIBFTDI_INCLUDE" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+
+else
+
+   # Extract the first word of "ftdi.h", so it can be a program name with args.
+set dummy ftdi.h; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_LIBFTDI_INCLUDE+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $LIBFTDI_INCLUDE in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_LIBFTDI_INCLUDE="$LIBFTDI_INCLUDE" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_LIBFTDI_INCLUDE="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+LIBFTDI_INCLUDE=$ac_cv_path_LIBFTDI_INCLUDE
+if test -n "$LIBFTDI_INCLUDE"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $LIBFTDI_INCLUDE" >&5
+$as_echo "$LIBFTDI_INCLUDE" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+
+fi
+
+
+
+if test "x${LIBFTDI_DIR}" != "x" ; then
+   echo -n "searching for libftdi1.so in ${LIBFTDI_DIR}..."
+   case $target in
+      x86_64-*)
+	for dir in \
+	   ${LIBFTDI_DIR} \
+	   ${LIBFTDI_DIR}/lib64 \
+	   ${LIBFTDI_DIR}/lib
+	do
+	   if test -r "$dir/libftdi1.so" ; then
+	      LIBFTDI_LIB="$dir"
+	      break
+	   fi
+        done
+      ;;
+      *-linux|i686-*)
+	for dir in \
+	   ${LIBFTDI_DIR} \
+	   ${LIBFTDI_DIR}/lib64 \
+	   ${LIBFTDI_DIR}/lib
+	do
+	   if test -r "$dir/libftdi1.so" ; then
+	      LIBFTDI_LIB="$dir"
+	      break
+	   fi
+        done
+      ;;
+  esac
+else
+   # Extract the first word of "libftdi1.so", so it can be a program name with args.
+set dummy libftdi1.so; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_LIBFTDI_LIB+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $LIBFTDI_LIB in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_LIBFTDI_LIB="$LIBFTDI_LIB" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_LIBFTDI_LIB="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+LIBFTDI_LIB=$ac_cv_path_LIBFTDI_LIB
+if test -n "$LIBFTDI_LIB"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $LIBFTDI_LIB" >&5
+$as_echo "$LIBFTDI_LIB" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+fi
+
+if test "x${LIBFTDI_LIB}" != "x" ; then
+   echo "yes"
+else
+   echo "no"
+fi
+
+
+
+# Check whether --with-libftdi_include was given.
+if test "${with_libftdi_include+set}" = set; then :
+  withval=$with_libftdi_include;
+   if test -d "$withval"; then
+      LIBFTDI_INC_DIR=$withval
+   elif test -f "$withval"; then
+      LIBFTDI_INC_DIR=${withval%/ftdi.h}
+   else
+      LIBFTDI_INC_DIR=${PATH}
+   fi
+   # Extract the first word of "ftdi.h", so it can be a program name with args.
+set dummy ftdi.h; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_LIBFTDI_INCLUDE+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $LIBFTDI_INCLUDE in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_LIBFTDI_INCLUDE="$LIBFTDI_INCLUDE" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $LIBFTDI_INC_DIR
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_LIBFTDI_INCLUDE="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+LIBFTDI_INCLUDE=$ac_cv_path_LIBFTDI_INCLUDE
+if test -n "$LIBFTDI_INCLUDE"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $LIBFTDI_INCLUDE" >&5
+$as_echo "$LIBFTDI_INCLUDE" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+
+else
+
+   # Extract the first word of "ftdi.h", so it can be a program name with args.
+set dummy ftdi.h; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_LIBFTDI_INCLUDE+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $LIBFTDI_INCLUDE in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_LIBFTDI_INCLUDE="$LIBFTDI_INCLUDE" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_LIBFTDI_INCLUDE="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+LIBFTDI_INCLUDE=$ac_cv_path_LIBFTDI_INCLUDE
+if test -n "$LIBFTDI_INCLUDE"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $LIBFTDI_INCLUDE" >&5
+$as_echo "$LIBFTDI_INCLUDE" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+fi
+
+
+
+
+# Check whether --with-libftdi_lib was given.
+if test "${with_libftdi_lib+set}" = set; then :
+  withval=$with_libftdi_lib;
+   if test -d "$withval"; then
+      LIBFTDI_LIB_DIR=$withval
+   elif test -f "$withval"; then
+      LIBFTDI_LIB_DIR=${withval%/libftdi1.so}
+   else
+      LIBFTDI_LIB_DIR=${PATH}
+   fi
+
+fi
+
+
+
+if test "x${LIBFTDI_INCLUDE}" == "x" ; then
+      echo -n "Searching for ftdi.h in standard paths . . ."
+
+   for dir in \
+      ${LIBFTDI_INC_DIR} \
+      ${LIBFTDI_INC_DIR}/libftdi1 \
+      /usr/include \
+      /usr/local/include \
+      /usr/share/include \
+      /usr/include/libftdi1 \
+      /usr/local/include/libftdi1 \
+      /usr/share/include/libftdi1
+   do
+      if test -r "$dir/ftdi.h" ; then
+         LIBFTDI_INCLUDE="$dir"
+         break
+      fi
+   done
+
+   if test "x${LIBFTDI_INCLUDE}" != "x" ; then
+      echo "yes"
+   else
+      echo "no"
+   fi
+fi
+
+
+if test "x${LIBFTDI_LIB}" == "x" ; then
+      echo -n "Searching for libftdi1.so in standard paths . . ."
+
+      case $target in
+         x86_64-*)
+	   for dir in \
+	      ${LIBFTDI_LIB_DIR} \
+	      ${LIBFTDI_LIB_DIR}/lib \
+	      ${LIBFTDI_LIB_DIR}/lib64 \
+	      /usr/lib \
+	      /usr/lib64 \
+	      /usr/local/lib \
+	      /usr/local/lib64
+	   do
+	      if test -r "$dir/libftdi1.so" ; then
+	         LIBFTDI_LIB="$dir"
+	         break
+	      fi
+           done
+         ;;
+         *-linux)
+	   for dir in \
+	      ${LIBFTDI_LIB_DIR} \
+	      ${LIBFTDI_LIB_DIR}/lib \
+	      /usr/lib \
+	      /usr/local/lib
+	   do
+	      if test -r "$dir/libftdi1.so" ; then
+	         LIBFTDI_LIB="$dir"
+	         break
+	      fi
+           done
+         ;;
+     esac
+
+     if test "x${LIBFTDI_LIB}" != "x" ; then
+        echo "yes"
+     else
+        echo "no"
+     fi
+fi
+
+if test "x${LIBFTDI_INCLUDE}" != "x" ; then
+   INC_SPECS="${INC_SPECS} -I${LIBFTDI_INCLUDE%/ftdi.h}"
+fi
+
+if test "x${LIBFTDI_LIB}" != "x" ; then
+   LIB_SPECS="${LIB_SPECS} -L${LIBFTDI_LIB} -lrt -lftdi1 -ldl -lpthread"
+fi
+
+
 # Check whether --with-libdir was given.
 if test "${with_libdir+set}" = set; then :
   withval=$with_libdir;
@@ -5066,6 +5440,79 @@ fi
 
 
 
+
+echo ""
+echo "Configuration results:"
+echo "----------------------------------------------------"
+echo ""
+
+if test "x${WISH_EXE}" == "x"; then
+   echo "ERROR: wish not found.  Use --with-tcl=<DIR>"
+else
+   echo "Using wish at: ${WISH_EXE}"
+fi
+
+if test "x${tcl_path}" == "x"; then
+   echo "ERROR: Tcl/Tk not found.  Use --with-tcl=<DIR>"
+else
+   echo "Using Tcl libraries at: ${TCL_LIB_DIR}"
+   echo "Using Tcl headers at: ${TCL_INC_DIR}"
+   echo "Using Tk libraries at: ${TK_LIB_DIR}"
+   echo "Using Tk headers at: ${TK_INC_DIR}"
+fi
+
+if test "x${LIBFTDI_LIB}" != "x" ; then
+   if test "x${LIBFTDI_INCLUDE}" == "x"; then
+      if test "x${FTDI_D2XX_INCLUDE}" == "x"; then
+         echo "ERROR: LIBFTDI headers not found.  Use --with-libftdi=<DIR>"
+      fi
+   else
+      echo "Using LIBFTDI headers at: ${LIBFTDI_INCLUDE}"
+      $as_echo "#define HAVE_LIBFTDI 1" >>confdefs.h
+
+   fi
+
+   if test "x${LIBFTDI_LIB}" == "x"; then
+      if test "x${FTDI_D2XX_LIB}" == "x"; then
+         echo "ERROR: LIBFTDI library not found.  Use --with-libftdi=<DIR>"
+      fi
+   else
+      echo "Using LIBFTDI library at: ${LIBFTDI_LIB}"
+      $as_echo "#define HAVE_LIBFTDI 1" >>confdefs.h
+
+   fi
+fi
+
+if test "x${FTDI_D2XX_LIB}" != "x" ; then
+   if test "x${FTDI_D2XX_INCLUDE}" == "x"; then
+      if test "x${LIBFTDI_INCLUDE}" == "x"; then
+         echo "ERROR: FTDI D2XX headers not found.  Use --with-ftdi-d2xx=<DIR>"
+      fi
+   else
+      echo "Using FTDI D2XX headers at: ${FTDI_D2XX_INCLUDE}"
+      $as_echo "#define HAVE_D2XX 1" >>confdefs.h
+
+   fi
+
+   if test "x${FTDI_D2XX_LIB}" == "x"; then
+      if test "x${LIBFTDI_LIB}" == "x"; then
+         echo "ERROR: FTDI D2XX library not found.  Use --with-ftdi-d2xx=<DIR>"
+      fi
+   else
+      echo "Using FTDI D2XX library at: ${LIBFTDI_LIB}"
+      $as_echo "#define HAVE_D2XX 1" >>confdefs.h
+
+   fi
+fi
+
+if test "x${LIBFTDI_LIB}" != "x" -a "x${FTDI_D2XX_LIB}" != "x"; then
+   echo "ERROR:  Cannot use libraries for both libftdi and d2XX!"
+fi
+if test "x${LIBFTDI_INCLUDE}" != "x" -a "x${FTDI_D2XX_INCLUDE}" != "x"; then
+   echo "ERROR:  Cannot use include files for both libftdi and d2XX!"
+fi
+
+echo "----------------------------------------------------"
 
 ac_config_files="$ac_config_files Makefile"
 
@@ -6230,37 +6677,3 @@ if test -n "$ac_unrecognized_opts" && test "$enable_option_checking" != no; then
 $as_echo "$as_me: WARNING: unrecognized options: $ac_unrecognized_opts" >&2;}
 fi
 
-
-echo ""
-echo "Configuration results:"
-echo "----------------------------------------------------"
-echo ""
-
-if test "x${WISH_EXE}" == "x"; then
-   echo "ERROR: wish not found.  Use --with-tcl=<DIR>"
-else
-   echo "Using wish at: ${WISH_EXE}"
-fi
-
-if test "x${tcl_path}" == "x"; then
-   echo "ERROR: Tcl/Tk not found.  Use --with-tcl=<DIR>"
-else
-   echo "Using Tcl libraries at: ${TCL_LIB_DIR}"
-   echo "Using Tcl headers at: ${TCL_INC_DIR}"
-   echo "Using Tk libraries at: ${TK_LIB_DIR}"
-   echo "Using Tk headers at: ${TK_INC_DIR}"
-fi
-
-if test "x${FTDI_D2XX_INCLUDE}" == "x"; then
-   echo "ERROR: FTDI D2XX headers not found.  Use --with-d2XX=<DIR>"
-else
-   echo "Using FTDI D2XX headers at: ${FTDI_D2XX_INCLUDE}"
-fi
-
-if test "x${FTDI_D2XX_LIB}" == "x"; then
-   echo "ERROR: FTDI D2XX libraries not found.  Use --with-d2XX=<DIR>"
-else
-   echo "Using FTDI D2XX headers at: ${FTDI_D2XX_LIB}"
-fi
-
-echo "----------------------------------------------------"
