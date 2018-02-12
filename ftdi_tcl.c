@@ -45,6 +45,7 @@ typedef struct _ftdi_record {
 #define CSB_NORAISE  0x08	// CSB is not raised after read or write
 #define LEGACY_MODE  0x10	// Legacy mode has fixed values for
 				// opcode and supports 16 registers.
+#define SERIAL_MODE  0x20	// FTDI in default serial mode.
 
 Tcl_HashTable handletab;
 Tcl_Interp *ftdiinterp;
@@ -176,6 +177,15 @@ ftditcl_get(ClientData clientData,
 
    tbuffer[0] = 0x83;		// Read high byte (i.e., Cbus)
 
+   if (verbose > 1) {
+      int i;
+      Fprintf(interp, stderr, "ftdi_get: Writing: ");
+      for (i = 0; i < 1; i++) {
+         Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
+
    ftStatus = ftdi_write_data(ftContext, tbuffer, 1);
    if (ftStatus < 0)
       Tcl_SetResult(interp, "Received error while reading Dbus\n", NULL);
@@ -222,7 +232,7 @@ ftditcl_verbose(ClientData clientData,
 /* Tcl function "ftdi::spi_command":  Set the word length of	*/
 /* the SPI command word, which can accomodate lengths other	*/
 /* than the default 8.	In bit-bang mode, the bit length is	*/
-/* arbitrary.  In MSSPE mode, the bit length must be a multiple	*/
+/* arbitrary.  In MPSSE mode, the bit length must be a multiple	*/
 /* of 8.							*/
 /*--------------------------------------------------------------*/
 
@@ -425,9 +435,11 @@ ftditcl_spi_bitbang(ClientData clientData,
       Tcl_SetResult(interp, "Received error while setting baud rate.\n", NULL);
 
    // Set device to Synchronous bit-bang mode, with pins SCK, SDI, and CSB
-   // set to output, SDO to input.
+   // set to output, SDO to input (bitbang mode defined as 0x01, should use
+   // defines from ftdi.h).
 
-   ftStatus = ftdi_set_bitmode(ftContext, (unsigned char)sigio, (unsigned char)0x04);
+   ftStatus = ftdi_set_bitmode(ftContext, (unsigned char)sigio,
+		(unsigned char)BITMODE_SYNCBB);
    if (ftStatus < 0)
       Tcl_SetResult(interp, "Received error while setting bit mode.\n", NULL);
 
@@ -453,6 +465,14 @@ ftditcl_spi_bitbang(ClientData clientData,
 
    // Set default values CSB = 1, SDI = 0, SCK = 0, SDO = don't care
    tbuffer[0] = sigpins[BB_CSB];
+
+   if (verbose > 1) {
+      Fprintf(interp, stderr, "spi_bitbang: Writing: ");
+      for (i = 0; i < 1; i++) {
+         Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
 
    ftStatus = ftdi_write_data(ftContext, tbuffer, 1);
    if (ftStatus < 0)
@@ -580,8 +600,8 @@ ftditcl_bang_write(ClientData clientData,
    // Assert CSB
    tbuffer[tidx++] = (unsigned char)0;
 
-   // Write command/register word
-   for (j = 0; j < cmdwidth; j++) {
+   // Write command/register word msb first
+   for (j = cmdwidth - 1; j >= 0; j--) {
       // input changes on falling edge of SCK
       tbuffer[tidx++] = (regnum & (1 << j)) ? sigpins[BB_SDI] : 0;
       tbuffer[tidx] = tbuffer[tidx - 1] | sigpins[BB_SCK];
@@ -591,7 +611,7 @@ ftditcl_bang_write(ClientData clientData,
    for (i = 0; i < wordcount; i++) {
       result = Tcl_ListObjIndex(interp, vector, i, &lobj);
       result = Tcl_GetIntFromObj(interp, lobj, &value);
-      for (j = 0; j < wordwidth; j++) {
+      for (j = wordwidth - 1; j >= 0; j--) {
 	 // input changes on falling edge of SCK
 	 tbuffer[tidx++] = (value & (1 << j)) ? sigpins[BB_SDI] : 0;
 	 tbuffer[tidx] = tbuffer[tidx - 1] | sigpins[BB_SCK];
@@ -602,6 +622,19 @@ ftditcl_bang_write(ClientData clientData,
    // De-assert CSB
    tbuffer[tidx++] = (flags & CSB_NORAISE) ? (unsigned char)0 :
 		(unsigned char)sigpins[BB_CSB];
+
+   if (verbose > 1) {
+      Fprintf(interp, stderr, "bitbang_write: Writing: ");
+      for (i = 0; i < nbytes; i++) {
+         Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
+
+   // Purge TX buffer
+   ftStatus = ftdi_usb_purge_tx_buffer(ftContext);
+   if (ftStatus < 0)
+      Tcl_SetResult(interp, "Received error while purging transmit buffer.\n", NULL);
 
    // SPI write using bit bang
    ftStatus = ftdi_write_data(ftContext, tbuffer, nbytes);
@@ -701,6 +734,14 @@ ftditcl_bang_set(ClientData clientData,
    }
    // Fprintf(interp, stderr, "Writing %d bytes\n", nbytes);
 
+   if (verbose > 1) {
+      Fprintf(interp, stderr, "bitbang_set: Writing: ");
+      for (i = 0; i < nbytes; i++) {
+         Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
+
    // Simple bit bang write
    ftStatus = ftdi_write_data(ftContext, tbuffer, nbytes);
    if (ftStatus < 0)
@@ -776,8 +817,8 @@ ftditcl_bang_read(ClientData clientData,
    // Assert CSB
    tbuffer[tidx++] = (unsigned char)0;
 
-   // Write command/register word
-   for (j = 0; j < wordwidth; j++) {
+   // Write command/register word msb first
+   for (j = cmdwidth - 1; j >= 0; j--) {
       // input changes on falling edge of SCK
       tbuffer[tidx++] = (regnum & (1 << j)) ? sigpins[BB_SDI] : 0;
       tbuffer[tidx] = tbuffer[tidx - 1] | sigpins[BB_SCK];
@@ -801,6 +842,19 @@ ftditcl_bang_read(ClientData clientData,
    if (ftStatus < 0)
       Tcl_SetResult(interp, "Received error while purging SPI RX.\n", NULL);
 
+   // Purge write buffer
+   ftStatus = ftdi_usb_purge_tx_buffer(ftContext);
+   if (ftStatus < 0)
+      Tcl_SetResult(interp, "Received error while purging SPI TX.\n", NULL);
+
+   if (verbose > 1) {
+      Fprintf(interp, stderr, "bitbang_read: Writing: ");
+      for (i = 0; i < nbytes; i++) {
+         Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
+
    // SPI write using bit bang
    ftStatus = ftdi_write_data(ftContext, tbuffer, nbytes);
    if (ftStatus < 0)
@@ -816,16 +870,38 @@ ftditcl_bang_read(ClientData clientData,
       Tcl_SetResult(interp, "SPI read:  short read error.\n", NULL);
 
    vector = Tcl_NewListObj(0, NULL);
-   tidx = 3 + 2 * wordwidth;	// No readback during reg/command write
+
+   tidx = 3 + 2 * cmdwidth;	// No readback during reg/command write
    for (i = 0; i < wordcount; i++) {
       value = 0;
-      for (j = 0; j < wordwidth; j++) {
+      for (j = wordwidth - 1; j >= 0; j--) {
+	 if (tidx >= nbytes) {
+	    value = -1;
+	    break;
+	 }
 	 if (tbuffer[tidx] & sigpins[BB_SDO]) {
 	    value |= (1 << j);
 	 }
 	 tidx += 2;
       }
       Tcl_ListObjAppendElement(interp, vector, Tcl_NewIntObj(value));
+   }
+
+   // Should be nothing left in the read buffer, but just in case. . . 
+   unsigned int x = ftContext->readbuffer_remaining;
+   if (x != 0) {
+       unsigned char *xbuffer;
+
+       Fprintf(interp, stderr, "%d words still remaining in buffer\n", x);
+       xbuffer = (unsigned char *)malloc(x * sizeof(unsigned char));
+       ftStatus = ftdi_read_data(ftContext, xbuffer, x);
+
+       // for (tidx = 0; tidx < x; tidx++) {
+       //    value = xbuffer[tidx];
+       //    Tcl_ListObjAppendElement(interp, vector, Tcl_NewIntObj(value));
+       // }
+
+       free(xbuffer);
    }
 
    Tcl_SetObjResult(interp, vector);
@@ -885,6 +961,15 @@ ftditcl_spi_csb_mode(ClientData clientData,
 
          tbuffer = (unsigned char *)malloc(sizeof(unsigned char));
          tbuffer[0] = (unsigned char)sigpins[BB_CSB];
+
+         if (verbose > 1) {
+	    int i;
+            Fprintf(interp, stderr, "spi_csb_mode: Writing: ");
+            for (i = 0; i < 1; i++) {
+               Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+            }
+            Fprintf(interp, stderr, "\n");
+         }
 
          ftStatus = ftdi_write_data(ftContext, tbuffer, 1);
          if (ftStatus < 0)
@@ -966,6 +1051,15 @@ ftditcl_spi_speed(ClientData clientData,
    tbuffer[2] = ival & 0xff;
    tbuffer[3] = (ival >> 8) & 0xff;
 
+   if (verbose > 1) {
+      int i;
+      Fprintf(interp, stderr, "spi_speed: Writing: ");
+      for (i = 0; i < 4; i++) {
+         Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
+
    ftStatus = ftdi_write_data(ftContext, tbuffer, 4);
    if (ftStatus < 0)
       Tcl_SetResult(interp, "Received error while setting SPI"
@@ -1040,6 +1134,14 @@ ftditcl_spi_read(ClientData clientData,
       }
    }
 
+   if (verbose > 1) {
+      Fprintf(interp, stderr, "spi_read: Writing: ");
+      for (i = 0; i < 6 + cmdcount; i++) {
+         Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
+
    ftStatus = ftdi_write_data(ftContext, tbuffer, 6 + cmdcount);
    if (ftStatus < 0)
       Tcl_SetResult(interp, "Received error while preparing SPI"
@@ -1063,6 +1165,14 @@ ftditcl_spi_read(ClientData clientData,
    tbuffer[3] = 0x80;	// Set Dbus
    tbuffer[4] = (flags & CS_INVERT) ? 0x08 : 0x00; // De-assert CS
    tbuffer[5] = 0x0b;	// SCK, SDI, and CS are outputs
+
+   if (verbose > 1) {
+      Fprintf(interp, stderr, "spi_read: Writing: ");
+      for (i = 0; i < 6; i++) {
+         Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
 
    ftStatus = ftdi_write_data(ftContext, tbuffer, 6);
    if (ftStatus < 0)
@@ -1165,6 +1275,14 @@ ftditcl_spi_write(ClientData clientData,
       }
    }
 
+   if (verbose > 1) {
+      Fprintf(interp, stderr, "spi_write: Writing: ");
+      for (i = 0; i < 6 + cmdcount; i++) {
+         Fprintf(interp, stderr, "0x%02x ", values[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
+
    ftStatus = ftdi_write_data(ftContext, values, 6 + cmdcount);
 
    for (i = 0; i < bytecount; i++) {
@@ -1175,6 +1293,14 @@ ftditcl_spi_write(ClientData clientData,
 
    // SPI write using MPSSE
 
+   if (verbose > 1) {
+      Fprintf(interp, stderr, "spi_write: Writing: ");
+      for (i = 0; i < 6 + bytecount + cmdcount; i++) {
+         Fprintf(interp, stderr, "0x%02x ", values[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
+
    ftStatus = ftdi_write_data(ftContext, values, bytecount + cmdcount + 6);
    if (ftStatus < 0)
       Tcl_SetResult(interp, "Received error in SPI write.\n", NULL);
@@ -1184,6 +1310,14 @@ ftditcl_spi_write(ClientData clientData,
    values[0] = 0x80;        // Set Dbus
    values[1] = (flags & CS_INVERT) ? 0x08 : 0x00; // De-assert CS
    values[2] = 0x0b;        // SCK, SDI, and CS are outputs
+
+   if (verbose > 1) {
+      Fprintf(interp, stderr, "spi_write: Writing: ");
+      for (i = 0; i < 3; i++) {
+         Fprintf(interp, stderr, "0x%02x ", values[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
 
    ftStatus = ftdi_write_data(ftContext, values, 3);
    if (ftStatus < 0)
@@ -1275,6 +1409,14 @@ ftditcl_spi_readwrite(ClientData clientData,
       }
    }
 
+   if (verbose > 1) {
+      Fprintf(interp, stderr, "spi_readwrite: Writing: ");
+      for (i = 0; i < 6 + cmdcount; i++) {
+         Fprintf(interp, stderr, "0x%02x ", values[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
+
    ftStatus = ftdi_write_data(ftContext, values, 6 + cmdcount);
    if (ftStatus < 0)
       Tcl_SetResult(interp, "Received error while preparing SPI"
@@ -1290,6 +1432,14 @@ ftditcl_spi_readwrite(ClientData clientData,
    values[3] = 0x80;	// Set Dbus
    values[4] = (flags & CS_INVERT) ? 0x08 : 0x00; // De-assert CS
    values[5] = 0x0b;	// SCK, SDI, and CS are outputs
+
+   if (verbose > 1) {
+      Fprintf(interp, stderr, "spi_readwrite: Writing: ");
+      for (i = 0; i < 6; i++) {
+         Fprintf(interp, stderr, "0x%02x ", values[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
 
    ftStatus = ftdi_write_data(ftContext, values, 6);
    if (ftStatus < 0)
@@ -1358,7 +1508,7 @@ ftditcl_list(ClientData clientData,
 //
 // Open an ftdi-usb device
 //
-// Usage:  ftdi_open [-invert|-mixed_mode|-legacy] [<descriptor_string>]
+// Usage:  ftdi_open [-invert|-mixed_mode|-legacy|-serial] [<descriptor_string>]
 //
 // This routine will parse through the USB device entries for
 // one matching either "<descriptor_string>", if supplied, or
@@ -1371,6 +1521,11 @@ ftditcl_list(ClientData clientData,
 // sense chip select (i.e., CSB instead of CS).  If the option
 // switch "-mixed_mode" is present, then assume a system in
 // which SDI and SDO are valid on opposite edges of SCK.
+//
+// Option switch "-serial" keeps the FTDI in the default serial
+// mode instead of switching to MPSSE mode, and is appropriate
+// to communicate with any FTDI serial device (e.g., Prologix
+// GPIB bus controller).
 //
 // In conjunction with the Open Circuit Design testbench
 // project, the code defines a device name "TestBench" and
@@ -1406,7 +1561,7 @@ ftditcl_open(ClientData clientData,
    unsigned char tbuffer[12], rbuffer[12];
    char descr[100];
 
-   // Check for "-invert", "-mixed_mode", or "-legacy" switches
+   // Check for "-invert", "-mixed_mode", "-legacy", or "-serial" switches
    // These must be at the beginning of the command.
    flags = 0;
    argstart = 1;
@@ -1426,6 +1581,11 @@ ftditcl_open(ClientData clientData,
 	 objc--;
 	 argstart++;
 	 flags |= LEGACY_MODE;
+      }
+      else if (!strncmp(swstr, "-serial", 6)) {
+	 objc--;
+	 argstart++;
+	 flags |= SERIAL_MODE;
       }
       else
 	 break;
@@ -1512,9 +1672,12 @@ ftditcl_open(ClientData clientData,
       // Set device to MPSSE mode, with bits 0, 1, and 3 set to output
       // (SCK, SDI, and CS).  All others (SDO and Dbus) are set to type input.
 
-      ftStatus = ftdi_set_bitmode(ftContext, (unsigned char)0x0b, (unsigned char)0x02);
-      if (ftStatus < 0)
-	 Tcl_SetResult(interp, "Received error while setting bit mode.\n", NULL);
+      if (!(flags & SERIAL_MODE)) {
+         ftStatus = ftdi_set_bitmode(ftContext, (unsigned char)0x0b,
+		(unsigned char)BITMODE_MPSSE);
+         if (ftStatus < 0)
+	    Tcl_SetResult(interp, "Received error while setting bit mode.\n", NULL);
+      }
 
       ftStatus = ftdi_usb_purge_tx_buffer(ftContext);
       if (ftStatus < 0)
@@ -1536,27 +1699,38 @@ ftditcl_open(ClientData clientData,
 	 Tcl_SetResult(interp, "Received error while setting timeouts.\n", NULL);
       */
 
-      // MPSSE setup. . .
-      tbuffer[0] = 0x80;        // Set Dbus
-      // De-assert CS (initial value 0 if CS, 1 if CSB)
-      tbuffer[1] = (flags & CS_INVERT) ? 0x08 : 0x00;
-      tbuffer[2] = 0x0b;        // SCK, SDI, and CS are outputs
+      if (!(flags & SERIAL_MODE)) {
+         // MPSSE setup. . .
+         tbuffer[0] = 0x80;        // Set Dbus
+         // De-assert CS (initial value 0 if CS, 1 if CSB)
+         tbuffer[1] = (flags & CS_INVERT) ? 0x08 : 0x00;
+         tbuffer[2] = 0x0b;        // SCK, SDI, and CS are outputs
 
-      tbuffer[3] = 0x82;        // Set Cbus (rotary switch)
-      tbuffer[4] = 0x00;        // Initial output values are 0
-      tbuffer[5] = 0x00;        // All pins are input
+         tbuffer[3] = 0x82;        // Set Cbus (rotary switch)
+         tbuffer[4] = 0x00;        // Initial output values are 0
+         tbuffer[5] = 0x00;        // All pins are input
 
-      tbuffer[6] = 0x8a;        // Enable high-speed clock (x5, up to 30MHz)
+         tbuffer[6] = 0x8a;        // Enable high-speed clock (x5, up to 30MHz)
 
-      tbuffer[7] = 0x86;        // Set clock divider
-      tbuffer[8] = 0x10;     	// Divide by 16
-      tbuffer[9] = 0x00;        // (High byte is zero)
+         tbuffer[7] = 0x86;        // Set clock divider
+         tbuffer[8] = 0x10;     	// Divide by 16
+         tbuffer[9] = 0x00;        // (High byte is zero)
 
-      ftStatus = ftdi_write_data(ftContext, tbuffer, 10);
-      if (ftStatus < 0)
-         Tcl_SetResult(interp, "Received error while writing init data\n", NULL);
-      else if (ftStatus != 10)
-         Tcl_SetResult(interp, "Short write error\n", NULL);
+         if (verbose > 1) {
+	    int i;
+            Fprintf(interp, stderr, "ftdi_open: Writing: ");
+            for (i = 0; i < 10; i++) {
+               Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+            }
+            Fprintf(interp, stderr, "\n");
+         }
+
+         ftStatus = ftdi_write_data(ftContext, tbuffer, 10);
+         if (ftStatus < 0)
+            Tcl_SetResult(interp, "Received error while writing init data\n", NULL);
+         else if (ftStatus != 10)
+            Tcl_SetResult(interp, "Short write error\n", NULL);
+      }
 
       // Now assign a unique string handler to the device and associate it
       // with the ftContext in a hash table.
@@ -1582,6 +1756,8 @@ ftditcl_open(ClientData clientData,
       }
       tobj = Tcl_NewStringObj(tclhandle, -1);
 
+      if (flags & SERIAL_MODE) return result;
+
       /* For everything beyond this point, the device is open	*/
       /* and the result code has been set.  All other errors	*/
       /* should be printed to stderr but not passed as a result	*/
@@ -1592,6 +1768,15 @@ ftditcl_open(ClientData clientData,
       /* and read the response "0xfa 0xff".			  */
 
       tbuffer[0] = 0xff;		// not a command
+
+      if (verbose > 1) {
+	 int i;
+         Fprintf(interp, stderr, "ftdi_open: Writing: ");
+         for (i = 0; i < 1; i++) {
+            Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+         }
+         Fprintf(interp, stderr, "\n");
+      }
 
       ftStatus = ftdi_write_data(ftContext, tbuffer, 1);
       if (ftStatus < 0) {
@@ -1616,6 +1801,15 @@ ftditcl_open(ClientData clientData,
       tbuffer[1] = (ftRecordPtr->flags & CS_INVERT) ? 0x00 : 0x08;
       tbuffer[2] = 0x0b;
 
+      if (verbose > 1) {
+	 int i;
+         Fprintf(interp, stderr, "ftdi_open: Writing: ");
+         for (i = 0; i < 3; i++) {
+            Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+         }
+         Fprintf(interp, stderr, "\n");
+      }
+
       ftStatus = ftdi_write_data(ftContext, tbuffer, 3);
       if (ftStatus < 0) {
          Fprintf(interp, stderr, "Received error while asserting CS.\n");
@@ -1628,60 +1822,6 @@ ftditcl_open(ClientData clientData,
       Tcl_SetObjResult(interp, tobj);
    }
    return result;
-}
-
-//--------------------------------------------------------------
-// Graceful closure of a single device
-//--------------------------------------------------------------
-
-int close_device(Tcl_Interp *interp, char *devname)
-{
-   struct ftdi_context * ftContext;
-   int ftStatus;
-   ftdi_record *ftRecordPtr;
-   long numWritten;
-   Tcl_HashSearch hs;
-   Tcl_HashEntry *h;
-   unsigned char flags;
-   unsigned char tbuffer[12];
-
-   ftContext = find_handle(devname, &flags);
-   if (ftContext == (struct ftdi_context *)NULL) return TCL_ERROR;
-
-   tbuffer[0] = 0x80;        // Set Dbus
-   tbuffer[1] = (flags & CS_INVERT) ? 0x08 : 0x00;
-   tbuffer[2] = 0x00;
-   tbuffer[3] = 0x82;        // Set Cbus
-   tbuffer[4] = 0x00;
-   tbuffer[5] = 0x00;
-
-   ftStatus = ftdi_write_data(ftContext, tbuffer, 6);
-   if (ftStatus < 0)
-      Tcl_SetResult(interp, "Received error while preparing device for close.", NULL);
-   else if (ftStatus != 6)
-      Tcl_SetResult(interp, "Short write to device.", NULL);
-
-   ftStatus = ftdi_usb_purge_tx_buffer(ftContext);
-   if (ftStatus < 0)
-      Tcl_SetResult(interp, "Received error while purging transmit buffer.", NULL);
-
-   ftStatus = ftdi_usb_purge_rx_buffer(ftContext);
-   if (ftStatus < 0)
-      Tcl_SetResult(interp, "Received error while purging receive buffer.", NULL);
-
-   ftStatus = ftdi_usb_close(ftContext);
-   if (ftStatus < 0) {
-      Tcl_SetResult(interp, "Received error while closing device.", NULL);
-      return TCL_ERROR;
-   }
-   h = Tcl_FindHashEntry(&handletab, devname);
-   if (h != (Tcl_HashEntry *)NULL) {
-      ftRecordPtr = (ftdi_record *)Tcl_GetHashValue(h);
-      free(ftRecordPtr->description);
-      free(ftRecordPtr);
-      Tcl_DeleteHashEntry(h);
-   }
-   return TCL_OK;
 }
 
 //--------------------------------------------------------------
@@ -1721,6 +1861,69 @@ ftditcl_close(ClientData clientData,
 	 result = close_device(interp, devname);
 	 if (result != TCL_OK) return result;
       }
+   }
+   return TCL_OK;
+}
+
+//--------------------------------------------------------------
+// Graceful closure of a single device
+//--------------------------------------------------------------
+
+int close_device(Tcl_Interp *interp, char *devname)
+{
+   struct ftdi_context * ftContext;
+   int ftStatus;
+   ftdi_record *ftRecordPtr;
+   long numWritten;
+   Tcl_HashSearch hs;
+   Tcl_HashEntry *h;
+   unsigned char flags;
+   unsigned char tbuffer[12];
+
+   ftContext = find_handle(devname, &flags);
+   if (ftContext == (struct ftdi_context *)NULL) return TCL_ERROR;
+
+   tbuffer[0] = 0x80;        // Set Dbus
+   tbuffer[1] = (flags & CS_INVERT) ? 0x08 : 0x00;
+   tbuffer[2] = 0x00;
+   tbuffer[3] = 0x82;        // Set Cbus
+   tbuffer[4] = 0x00;
+   tbuffer[5] = 0x00;
+
+   if (verbose > 1) {
+      int i;
+      Fprintf(interp, stderr, "ftdi_close: Writing: ");
+      for (i = 0; i < 6; i++) {
+         Fprintf(interp, stderr, "0x%02x ", tbuffer[i]);
+      }
+      Fprintf(interp, stderr, "\n");
+   }
+
+   ftStatus = ftdi_write_data(ftContext, tbuffer, 6);
+   if (ftStatus < 0)
+      Tcl_SetResult(interp, "Received error while preparing device for close.", NULL);
+   else if (ftStatus != 6)
+      Tcl_SetResult(interp, "Short write to device.", NULL);
+
+   ftStatus = ftdi_usb_purge_tx_buffer(ftContext);
+   if (ftStatus < 0)
+      Tcl_SetResult(interp, "Received error while purging transmit buffer.", NULL);
+
+   ftStatus = ftdi_usb_purge_rx_buffer(ftContext);
+   if (ftStatus < 0)
+      Tcl_SetResult(interp, "Received error while purging receive buffer.", NULL);
+
+   ftStatus = ftdi_usb_close(ftContext);
+   if (ftStatus < 0) {
+      Tcl_SetResult(interp, "Received error while closing device.", NULL);
+      return TCL_ERROR;
+   }
+   h = Tcl_FindHashEntry(&handletab, devname);
+   if (h != (Tcl_HashEntry *)NULL) {
+      ftRecordPtr = (ftdi_record *)Tcl_GetHashValue(h);
+      free(ftRecordPtr->description);
+      free(ftRecordPtr);
+      Tcl_DeleteHashEntry(h);
    }
    return TCL_OK;
 }
@@ -1859,7 +2062,9 @@ Tclftdi_Init(Tcl_Interp *interp)
 		(Tcl_ObjCmdProc *)ftdi_commands[cmdidx].func,
 		(ClientData)NULL, (Tcl_CmdDeleteProc *)NULL);
    }
+   gpib_command_init(interp);
    Tcl_InitHashTable(&handletab, TCL_STRING_KEYS);
+   gpib_global_init(interp);
    return TCL_OK;
 }
 

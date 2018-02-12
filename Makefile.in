@@ -28,7 +28,7 @@ WISH_EXE = @WISH_EXE@
 LIB_SPECS = @LIB_SPECS@
 INC_SPECS = @INC_SPECS@
 
-FTDI_OBJS = ftdi_tcl.o
+FTDI_OBJS = ftdi_tcl.o gpib_tcl.o gpib_driver.o gpib_controller.o
 FTDI_HDRS = 
 
 WRAPPER_INIT = tclftdi.tcl
@@ -68,6 +68,21 @@ ftdi_tcl.o: ftdi_tcl.c d2xx_tcl.c
 	$(RM) ftdi_tcl.o
 	$(CC) ${CPPFLAGS} ${CFLAGS} ${DEFS} ${FTDIDEFS} $(PATHNAMES) $(INCLUDES) \
 		$(INC_SPECS) ftdi_tcl.c -c -o ftdi_tcl.o
+
+gpib_controller.o: gpib_controller.c gpib_driver.h
+	$(RM) gpib_controller.o
+	$(CC) ${CPPFLAGS} ${CFLAGS} ${DEFS} ${GPIBDEFS} $(PATHNAMES) $(INCLUDES) \
+		$(INC_SPECS) gpib_controller.c -c -o gpib_controller.o
+
+gpib_driver.o: gpib_driver.c gpib_driver.h
+	$(RM) gpib_driver.o
+	$(CC) ${CPPFLAGS} ${CFLAGS} ${DEFS} ${GPIBDEFS} $(PATHNAMES) $(INCLUDES) \
+		$(INC_SPECS) gpib_driver.c -c -o gpib_driver.o
+
+gpib_tcl.o: gpib_tcl.c
+	$(RM) gpib_tcl.o
+	$(CC) ${CPPFLAGS} ${CFLAGS} ${DEFS} ${GPIBDEFS} $(PATHNAMES) $(INCLUDES) \
+		$(INC_SPECS) gpib_tcl.c -c -o gpib_tcl.o
 
 install:
 	$(MKDIR) $(DESTDIR)$(TCLFTDI_LIB_DIR)
