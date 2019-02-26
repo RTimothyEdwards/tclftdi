@@ -275,6 +275,86 @@ ftditcl_spi_command(ClientData clientData,
 }
 
 /*--------------------------------------------------------------*/
+/* Tcl function "ftdi::disable":  Disable a channel by	*/
+/* putting it into bitbang mode and setting all bits to input	*/
+/* so that they are all undriven.				*/
+/*--------------------------------------------------------------*/
+
+int
+ftditcl_disable(ClientData clientData,
+	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+{
+   ftdi_record *ftRecord;
+   struct ftdi_context * ftContext;
+   int ftStatus;
+
+   long numWritten;
+
+   int result, i, j, k;
+   unsigned char *values;
+   unsigned char flags;
+   unsigned char sigio;
+   unsigned char *sigpins;
+   int len, loclen, bangmode;
+
+   if (objc != 2) {
+      Tcl_SetResult(interp, "disable: Need device name.\n", NULL);
+      return TCL_ERROR;
+   }
+   ftRecord = find_record(Tcl_GetString(objv[1]), &ftContext);
+   if (ftRecord == (ftdi_record *)NULL) {
+      Tcl_SetResult(interp, "disable:  No such device\n", NULL);
+      return TCL_ERROR;
+   }
+   flags = ftRecord->flags;
+   sigpins = &(ftRecord->sigpins[0]);
+
+   ftRecord->flags |= BITBANG_MODE;
+   ftRecord->wordwidth = 8;
+   sigio = 0x00;		// Everything is an input
+
+   // Mark all signal pins as unassigned.
+   for (i = 0; i < 8; i++) sigpins[i] = 0x00;
+
+   // Reset the FTDI device
+   ftStatus = ftdi_usb_reset(ftContext);
+   if (ftStatus < 0)
+      Tcl_SetResult(interp, "Received error while resetting device.\n", NULL);
+
+   // Set baudrate to default (Note: actual bits per second is 16 times the value)
+   // So 62500 baud = 1Mbps.  However, SCK clock takes two transmissions (up, down)
+   // so double this value to get a 1Mpbs SCK, or 125000.
+   ftStatus = ftdi_set_baudrate(ftContext, (long)125000);
+   if (ftStatus < 0)
+      Tcl_SetResult(interp, "Received error while setting baud rate.\n", NULL);
+
+   // Set device to Synchronous bit-bang mode.
+
+   ftStatus = ftdi_set_bitmode(ftContext, (unsigned char)sigio,
+		(unsigned char)BITMODE_SYNCBB);
+   if (ftStatus < 0)
+      Tcl_SetResult(interp, "Received error while setting bit mode.\n", NULL);
+
+   ftStatus = ftdi_usb_purge_tx_buffer(ftContext);
+   if (ftStatus < 0)
+      Tcl_SetResult(interp, "Received error while purging transmit buffer.\n", NULL);
+
+   ftStatus = ftdi_usb_purge_rx_buffer(ftContext);
+   if (ftStatus < 0)
+      Tcl_SetResult(interp, "Received error while purging receive buffer.\n", NULL);
+
+   // Set latency timer (in ms) (legacy case is 16; FT2232 minimum 1)
+   ftStatus = ftdi_set_latency_timer(ftContext, (unsigned char)5);
+   if (ftStatus < 0)
+      Tcl_SetResult(interp, "Received error while setting latency timer.\n", NULL);
+
+   // Return
+   return TCL_OK;
+}
+
+
+
+/*--------------------------------------------------------------*/
 /* Tcl function "ftdi::spi_bitbang": Set or disable SPI bit-	*/
 /* bang mode.  If setting, optional arguments may specify the	*/
 /* order of pins.						*/
@@ -1544,10 +1624,8 @@ ftditcl_open(ClientData clientData,
 {
    Tcl_HashEntry *h;
    Tcl_Obj *tobj;
-   static char devdflt0[] = "TestBench B";
-   static char devdflt1[] = "TestBench A";
-   static char devdflt2[] = "Dual RS232-HS B";
-   static char devdflt3[] = "Dual RS232-HS A";
+   static char devdflt0[] = "TestBench";
+   static char devdflt1[] = "Dual RS232-HS";
 
    struct ftdi_context *ftContext, *ftLink;
    int ftStatus;
@@ -1555,11 +1633,12 @@ ftditcl_open(ClientData clientData,
    struct ftdi_device_list *infonode = NULL, *snode;
    long numBytes;
    long numWritten, numRead;
-   int devnum, new, argstart, result;
+   int devnum, new, argstart, result, channel;
    unsigned char flags = 0x0;
-   char tclhandle[32], *devstr, *swstr;
+   char tclhandle[32], *devstr, *swstr, *chanstr;
    unsigned char tbuffer[12], rbuffer[12];
    char descr[100];
+   bool dolist = false;
 
    // Check for "-invert", "-mixed_mode", "-legacy", or "-serial" switches
    // These must be at the beginning of the command.
@@ -1572,20 +1651,25 @@ ftditcl_open(ClientData clientData,
 	 argstart++;
 	 flags |= CS_INVERT;
       }
-      else if (!strncmp(swstr, "-mixed", 4)) {
+      else if (!strncmp(swstr, "-mixed", 6)) {
 	 objc--;
 	 argstart++;
 	 flags |= MIXED_MODE;
       }
-      else if (!strncmp(swstr, "-legacy", 6)) {
+      else if (!strncmp(swstr, "-legacy", 7)) {
 	 objc--;
 	 argstart++;
 	 flags |= LEGACY_MODE;
       }
-      else if (!strncmp(swstr, "-serial", 6)) {
+      else if (!strncmp(swstr, "-serial", 7)) {
 	 objc--;
 	 argstart++;
 	 flags |= SERIAL_MODE;
+      }
+      else if (!strncmp(swstr, "-list", 5)) {
+	 objc--;
+	 argstart++;
+	 dolist = true;
       }
       else
 	 break;
@@ -1594,11 +1678,64 @@ ftditcl_open(ClientData clientData,
    // Create and initialize a new context
    ftContext = ftdi_new();
 
-   // Assume device channel A (devdflt0) unless otherwise specified
+   // Assume device (devdflt0) unless otherwise specified
    if (objc < 2)
       devstr = devdflt0;
    else
       devstr = Tcl_GetString(objv[argstart]);
+
+   channel = INTERFACE_ANY;
+   if (objc < 3)
+      chanstr = NULL;	/* Assume INTERFACE_ALL */
+   else
+      chanstr = Tcl_GetString(objv[argstart + 1]);
+
+   if (objc == 2) {
+      /* Check if 2nd argument was a single letter A/B/C/D, */
+      /* in which case interpret 2nd argument as the device */
+      /* channel and assume a default device name.	    */
+
+      if (strlen(devstr) == 1)
+	 if ((*devstr >= 'A') && (*devstr <= 'D')) {
+	     chanstr = devstr;
+	     devstr = devdflt0;
+	 }
+   }
+
+   // If devstr ends in a space followed by "A" to "D", then set the
+   // device channel here (must be done between ftdi_() and ftdi_open(),
+   // and given an uninitialized context).
+
+   if (chanstr == NULL)
+      channel = INTERFACE_ANY;
+   else if (!strcmp(chanstr, "any"))
+      channel = INTERFACE_ANY;
+   else if (!strcmp(chanstr, "A"))
+      channel = INTERFACE_A;
+   else if (!strcmp(chanstr, "B"))
+      channel = INTERFACE_B;
+   else if (!strcmp(chanstr, "C"))
+      channel = INTERFACE_C;
+   else if (!strcmp(chanstr, "D"))
+      channel = INTERFACE_D;
+   else {
+      Tcl_SetResult(interp, "Unknown device channel.\n", NULL);
+      return TCL_ERROR;
+   }
+   result = ftdi_set_interface(ftContext, channel);
+   if (result != 0) {
+      if (result == -1) {
+	 Tcl_SetResult(interp, "Channel is not recognized for device.\n", NULL);
+      }
+      else if (result == -2) {
+	 Tcl_SetResult(interp, "USB error while setting channel.\n", NULL);
+      }
+      else if (result == -3) {
+	 Tcl_SetResult(interp, "Device is open; channel cannot be set.\n", NULL);
+      }
+      return TCL_ERROR;
+   }
+
 
    // Generate a list of USB devices and check for match with the
    // description string.
@@ -1613,16 +1750,15 @@ ftditcl_open(ClientData clientData,
       return TCL_ERROR;
    }
 
-
    for (snode = infonode; snode; snode = snode->next) {
       ftdi_usb_get_strings(ftContext, snode->dev, NULL, 0, descr, 100, NULL, 0);
       if (!strcmp(descr, devstr))
 	 break;
    }
 
-   if ((snode == NULL) && ((devstr == devdflt0) || (devstr == devdflt1))) {
+   if ((snode == NULL) && (devstr == devdflt0)) {
       // Try the other default (i.e., unprogrammed EPROM). . .
-      devstr = devdflt2;
+      devstr = devdflt1;
 
       for (snode = infonode; snode; snode = snode->next) {
          ftdi_usb_get_strings(ftContext, snode->dev, NULL, 0, descr, 100, NULL, 0);
@@ -1631,7 +1767,7 @@ ftditcl_open(ClientData clientData,
       }
    }
 
-   if (snode == NULL) {
+   if (snode == NULL || dolist == true) {
       // Tcl_SetResult(interp, "No device matches description.\n", NULL);
       Tcl_Obj *lobj, *sobj;
 
@@ -1646,7 +1782,7 @@ ftditcl_open(ClientData clientData,
       // return a list of the description strings so that the user can
       // try again with the one they're looking for.
 
-      if (infonode->next == NULL) {
+      if (infonode->next == NULL && dolist == false) {
 	 ftStatus = ftdi_usb_open_dev(ftContext, infonode->dev);
       }
       else {
@@ -1954,6 +2090,7 @@ static cmdstruct ftdi_commands[] =
    {"ftdi::bitbang_write", (void *)ftditcl_bang_write},
    {"ftdi::bitbang_word", (void *)ftditcl_bang_word},
    {"ftdi::bitbang_set", (void *)ftditcl_bang_set},
+   {"ftdi::disable", (void *)ftditcl_disable},
    {"ftdi::listdev", (void *)ftditcl_list},
    {"ftdi::opendev", (void *)ftditcl_open},
    {"ftdi::setid", (void *)ftditcl_setid},
