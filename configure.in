@@ -11,6 +11,8 @@ AC_CANONICAL_SYSTEM
 
 PACKAGE=tclftdi
 VERSION=`cat ./VERSION | cut -d. -f1-2`
+AC_DEFINE_UNQUOTED(TCLFTDI_VERSION, "${TCLFTDI_VERSION}")
+AC_DEFINE_UNQUOTED(TCLFTDI_REVISION, "${TCLFTDI_REVISION}")
 
 AC_SUBST(VERSION)
 AC_ARG_PROGRAM
@@ -47,7 +49,7 @@ AC_ARG_ENABLE(optimize,
 AC_DEFUN([AC_PROG_LD],
 [AC_ARG_WITH(gnu-ld,
 [  --with-gnu-ld           assume the C compiler uses GNU ld [[default=no]]],
-test "$withval" = no || xc_with_gnu_ld=yes, xc_with_gnu_ld=no)
+test "$withval" = no || with_gnu_ld=yes, with_gnu_ld=no)
 AC_REQUIRE([AC_PROG_CC])dnl
 AC_REQUIRE([AC_CANONICAL_HOST])dnl
 dnl ###not for PostgreSQL### AC_REQUIRE([AC_CANONICAL_BUILD])dnl
@@ -81,10 +83,10 @@ changequote([,])dnl
     ;;
   *)
     # If it is relative, then search for the first ld in PATH.
-    xc_with_gnu_ld=unknown
+    with_gnu_ld=unknown
     ;;
   esac
-elif test "$xc_with_gnu_ld" = yes; then
+elif test "$with_gnu_ld" = yes; then
   AC_MSG_CHECKING([for GNU ld])
 else
   AC_MSG_CHECKING([for non-GNU ld])
@@ -100,9 +102,9 @@ AC_CACHE_VAL(ac_cv_path_LD,
       # but apparently some GNU ld's only accept -v.
       # Break only if it was the GNU/non-GNU ld that we prefer.
       if "$ac_cv_path_LD" -v 2>&1 < /dev/null | egrep '(GNU|with BFD)' > /dev/null; then
-        test "$xc_with_gnu_ld" != no && break
+        test "$with_gnu_ld" != no && break
       else
-        test "$xc_with_gnu_ld" != yes && break
+        test "$with_gnu_ld" != yes && break
       fi
     fi
   done
@@ -128,7 +130,7 @@ if $LD -v 2>&1 </dev/null | egrep '(GNU|with BFD)' 1>&5; then
 else
   ac_cv_prog_gnu_ld=no
 fi])
-xc_with_gnu_ld=$ac_cv_prog_gnu_ld
+with_gnu_ld=$ac_cv_prog_gnu_ld
 ])
 
 AC_PROG_LD
@@ -201,7 +203,7 @@ if test "x$tcl_path" != "x" ; then
     #  1. Search previously named locations.
 
     for dir in \
-     $prefix \
+     $ac_default_prefix \
      $exec_prefix
     do
       if test -r "$dir/tclConfig.sh" ; then
@@ -223,11 +225,10 @@ if test "x$tcl_path" != "x" ; then
        `ls -dr /usr/local/tcl/tcl[[7-9]].[[0-9]]* 2>/dev/null` \
        /usr/local/tcl \
        /usr/local/lib \
-       /usr/local \
-       `ls -dr /usr/share/tcltk/tcl[[7-9]].[[0-9]]* 2>/dev/null` \
-       /sw/lib \
-       /usr/lib \
        /usr/lib64 \
+       /usr/local \
+       `ls -dr /usr/lib/tcl[[7-9]].[[0-9]]* 2>/dev/null` \
+       /sw/lib \
        /usr
       do
         if test -r "$dir/tclConfig.sh" ; then
@@ -264,7 +265,7 @@ if test "x$tcl_path" != "x" ; then
     # by --with-tcl or --with-tk. 
     #
     for dir in \
-     $tcl_path \
+     $tk_path \
      $tcl_path 
     do
       if test -r "$dir/tkConfig.sh" ; then
@@ -287,7 +288,7 @@ if test "x$tcl_path" != "x" ; then
     #  1. Search previously named locations.
     # 
     for dir in \
-     $prefix \
+     $ac_default_prefix \
      $exec_prefix
     do
       if test -r "$dir/tkConfig.sh" ; then
@@ -306,21 +307,17 @@ if test "x$tcl_path" != "x" ; then
     # 
     if test "x$tk_config_sh" = "x" ; then
       for dir in \
-       /usr/local \
-       /usr \
-       `ls -dr /usr/local/lib/tk[[7-9]].[[0-9]]* 2>/dev/null` \
-       `ls -dr /usr/lib/tk[[7-9]].[[0-9]]* 2>/dev/null` \
-       `ls -dr /usr/local/tk/tk[[7-9]].[[0-9]]* 2>/dev/null` \
-       `ls -dr /usr/local/tk[[7-9]].[[0-9]]* 2>/dev/null` \
-       /usr/local/tk \
-       `ls -dr /usr/local/lib/tcl[[7-9]].[[0-9]]* 2>/dev/null` \
-       `ls -dr /usr/lib/tcl/tk[[7-9]].[[0-9]]* 2>/dev/null` \
        `ls -dr /usr/local/tcl/tcl[[7-9]].[[0-9]]* 2>/dev/null` \
-       `ls -dr /usr/share/tcltk/tk[[7-9]].[[0-9]]* 2>/dev/null` \
-       /sw/lib \
-       /usr/lib \
+       `ls -dr /usr/local/tk/tk[[7-9]].[[0-9]]* 2>/dev/null` \
+       /usr/local/tcl \
+       /usr/local/lib \
        /usr/lib64 \
-       ${x_libraries}
+       /usr/local \
+       `ls -dr /usr/lib/tcl[[7-9]].[[0-9]]* 2>/dev/null` \
+       `ls -dr /usr/lib/tk[[7-9]].[[0-9]]* 2>/dev/null` \
+       /sw/lib \
+       ${x_libraries} \
+       /usr
       do
         if test -r "$dir/tkConfig.sh" ; then
 	  tk_config_sh="$dir/tkConfig.sh"
@@ -398,11 +395,11 @@ if test "x$tcl_path" != "x" ; then
   if test "x${tcl_includes}" != "x" ; then
     if test -r "${tcl_includes}/tcl.h" ; then
       TCL_INC_DIR=${tcl_includes}
-    elif test "x${TCL_INCLUDE_SPEC}" == "x" ; then
+    else
       echo "Can't find tcl.h in \"${tcl_includes}\""
       tcl_path=""
     fi
-  elif test "x${TCL_INCLUDE_SPEC}" == "x" ; then
+  else
     for dir in \
      ${TCL_PREFIX}/include/tcl${TCL_MAJOR_VERSION}.${TCL_MINOR_VERSION} \
      ${TCL_PREFIX}/include \
@@ -418,8 +415,6 @@ if test "x$tcl_path" != "x" ; then
       echo "Can't find tcl.h header file"
       tcl_path=""
     fi
-  else
-    TCL_INC_DIR=`echo ${TCL_INCLUDE_SPEC} | sed -e '/-I/s/-I//'`
   fi
 fi
 
@@ -463,8 +458,14 @@ if test "x$tcl_path" != "x" ; then
       ;;
   esac
 
-  TCL_LIB_SPEC="-l${TCL_LIB_NAME}"
-  TK_LIB_SPEC="-l${TK_LIB_NAME}"
+  loclib=`echo ${TCL_LIB_SPEC} | sed -e 's/.*-L//' -e 's/ .*//'`
+
+  if test "x${TCL_LIB_SPEC}" = "x" ; then
+     TCL_LIB_SPEC="-l${TCL_LIB_NAME}"
+  fi
+  if test "x${TK_LIB_SPEC}" = "x" ; then
+     TK_LIB_SPEC="-l${TK_LIB_NAME}"
+  fi
 
 # Find the version of "wish" that corresponds to TCL_EXEC_PREFIX
 # We really ought to run "ldd" to confirm that the linked libraries match.
@@ -501,24 +502,27 @@ if test "x$tcl_path" != "x" ; then
   case $target in
      *-hpux*)
 	SHDLIB_EXT=".sl"
+	SHDLIB_EXT_ALT=".sl"
 	;;
      *cygwin*)
 	SHDLIB_EXT=".dll"
+	SHDLIB_EXT_ALT=".dll.a"
 	;;
      *-darwin*)
 	SHDLIB_EXT=".dylib"
-	;;
-     *-openbsd*)
-	SHDLIB_EXT=".so.${TCL_LIB_FILE##*.so.}"
+	SHDLIB_EXT_ALT=".dylib"
 	;;
      *)
 	SHDLIB_EXT=".so"
+	SHDLIB_EXT_ALT=".so"
 	;;
   esac
 
   if test "x${tcl_libraries}" != "x" ; then
     for libname in \
-     "${tcl_libraries}/lib${TCL_LIB_NAME}${SHDLIB_EXT}"
+     "${tcl_libraries}/lib${TCL_LIB_FILE}" \
+     "${tcl_libraries}/lib${TCL_LIB_NAME}${SHDLIB_EXT}" \
+     "${tcl_libraries}/lib${TCL_LIB_NAME}${SHDLIB_EXT_ALT}"
     do
       if test -r "$libname" ; then
         TCL_LIB_DIR="${tcl_libraries}"
@@ -531,11 +535,13 @@ if test "x$tcl_path" != "x" ; then
       tcl_path=""
     fi
   else
-    for libpfix in "lib64" "lib"
+    for libname in \
+      "${loclib:=${TCL_EXEC_PREFIX}/lib}/lib${TCL_LIB_NAME}${SHDLIB_EXT}" \
+      "${loclib:=${TCL_EXEC_PREFIX}/lib}/lib${TCL_LIB_NAME}${SHDLIB_EXT_ALT}" \
+      "${loclib:=${TCL_EXEC_PREFIX}/lib64}/lib${TCL_LIB_NAME}${SHDLIB_EXT}"
     do
-      libname="${TCL_EXEC_PREFIX}/${libpfix}/lib${TCL_LIB_NAME}${SHDLIB_EXT}"
       if test -r "$libname" ; then
-        TCL_LIB_DIR="${TCL_EXEC_PREFIX}/${libpfix}"
+        TCL_LIB_DIR="${TCL_EXEC_PREFIX}/lib"
         break
       fi
     done
@@ -549,7 +555,9 @@ fi
 if test "x$tcl_path" != "x" ; then
   if test "x${tk_libraries}" != "x" ; then
     for libname in \
-     "${tk_libraries}/lib${TK_LIB_NAME}${SHDLIB_EXT}"
+     "${tk_libraries}/${TCL_LIB_FILE}" \
+     "${tk_libraries}/lib${TK_LIB_NAME}${SHDLIB_EXT}" \
+     "${tk_libraries}/lib${TK_LIB_NAME}${SHDLIB_EXT_ALT}"
     do
       if test -r "$libname" ; then
         TK_LIB_DIR="${tk_libraries}"
@@ -561,11 +569,13 @@ if test "x$tcl_path" != "x" ; then
       tcl_path=""
     fi
   else
-    for libpfix in "lib64" "lib"
+    for libname in \
+      "${loclib:=${TK_EXEC_PREFIX}/lib}/lib${TK_LIB_NAME}${SHDLIB_EXT}" \
+      "${loclib:=${TK_EXEC_PREFIX}/lib}/lib${TK_LIB_NAME}${SHDLIB_EXT_ALT}" \
+      "${loclib:=${TK_EXEC_PREFIX}/lib64}/lib${TK_LIB_NAME}${SHDLIB_EXT}"
     do
-      libname="${TK_EXEC_PREFIX}/${libpfix}/lib${TK_LIB_NAME}${SHDLIB_EXT}"
       if test -r "$libname" ; then
-        TK_LIB_DIR="${TK_EXEC_PREFIX}/${libpfix}"
+        TK_LIB_DIR="${TK_EXEC_PREFIX}/lib"
         break
       fi
     done
@@ -580,22 +590,25 @@ dnl --------------------------------
 dnl End of Tcl/Tk search
 dnl --------------------------------
 
+if test "x$tcl_path" != "x" ; then
+  LIB_SPECS_NOSTUB="${LIB_SPECS}"
+
 # -----------------------------------------------------------------------
 # 
 # Tk libraries and header files
 #
 # -----------------------------------------------------------------------
 
-if test "x$tcl_path" != "x" ; then
-  if test "${TK_INC_DIR}" != "/usr/include" -a \
-	"${TK_INC_DIR}" != "${TCL_INC_DIR}"; then
+  if test "${TK_INC_DIR}" != "/usr/include" ; then
     INC_SPECS="${INC_SPECS} -I${TK_INC_DIR}"
   fi
   if test "${TK_LIB_DIR}" = "/usr/lib" -o \
 	"${TK_LIB_DIR}" = "/usr/lib64" ; then
-    LIB_SPECS="${TK_LIB_SPEC}"
+    LIB_SPECS_NOSTUB="${LIB_SPECS_NOSTUB} ${TK_LIB_SPEC}"
+    LIB_SPECS="${LIB_SPECS} ${TK_STUB_LIB_SPEC}"
   else
-    LIB_SPECS="-L${TK_LIB_DIR} ${TK_LIB_SPEC}"
+    LIB_SPECS_NOSTUB="${LIB_SPECS_NOSTUB} -L${TK_LIB_DIR} ${TK_LIB_SPEC}"
+    LIB_SPECS="${LIB_SPECS} -L${TK_LIB_DIR} ${TK_STUB_LIB_SPEC}"
     if test "x${loader_run_path}" = "x" ; then
       loader_run_path="${TK_LIB_DIR}"
     else
@@ -612,18 +625,19 @@ if test "x$tcl_path" != "x" ; then
 #
 #
 # -----------------------------------------------------------------------
-  if test "x${TCL_INCLUDE_SPEC}" != "x" ; then
-    INC_SPECS="${INC_SPECS} ${TCL_INCLUDE_SPEC}"
-  elif test "${TCL_INC_DIR}" != "/usr/include" ; then
+  if test "${TCL_INC_DIR}" != "/usr/include" -a \
+	"${TCL_INC_DIR}" != "${TK_INC_DIR}" ; then
     INC_SPECS="${INC_SPECS} -I${TCL_INC_DIR}"
   fi
 
   if test "${TCL_LIB_DIR}" = "/usr/lib" -o \
 	"${TCL_LIB_DIR}" = "/usr/lib64" -o \
 	"${TCL_LIB_DIR}" = "${TK_LIB_DIR}" ; then
-    LIB_SPECS="${LIB_SPECS} ${TCL_LIB_SPEC}"
+    LIB_SPECS_NOSTUB="${LIB_SPECS_NOSTUB} ${TCL_LIB_SPEC}"
+    LIB_SPECS="${LIB_SPECS} ${TCL_STUB_LIB_SPEC}"
   else
-    LIB_SPECS="${LIB_SPECS} -L${TCL_LIB_DIR} ${TCL_LIB_SPEC}"
+    LIB_SPECS_NOSTUB="${LIB_SPECS_NOSTUB} -L${TCL_LIB_DIR} ${TCL_LIB_SPEC}"
+    LIB_SPECS="${LIB_SPECS} -L${TCL_LIB_DIR} ${TCL_STUB_LIB_SPEC}"
     if test "x${loader_run_path}" = "x" ; then
       loader_run_path="${TCL_LIB_DIR}"
     else
@@ -983,9 +997,9 @@ AC_SUBST(TCLFTDI_LIB_DIR)
 
 # Initialize shared library build variables
 
+  SHLIB_LD=""
   LDDL_FLAGS="-shared"
   SHDLIB_EXT=".so"
-  LD_RUN_PATH=""
   EXTRA_LIB_SPECS=""
 
   build_shared="yes"
@@ -999,22 +1013,22 @@ AC_SUBST(TCLFTDI_LIB_DIR)
       ;;
 
     *-darwin*)
+      SHLIB_CFLAGS="-fPIC"
       SHDLIB_EXT=".dylib"
-      SHLIB_LIB_SPECS="${LIB_SPECS}"
-      if test "${xc_with_gnu_ld}" = "yes" ; then
-	 LDDL_FLAGS="-dynamiclib -bind_at_load"
-      else
-	 LDDL_FLAGS="-single_module -dynamiclib -flat_namespace"
-	 LDDL_FLAGS="${LDDL_FLAGS} -undefined suppress -noprebind"
-	 SHLIB_CFLAGS="-I/sw/include -fno-common"
-      fi
+      LDDL_FLAGS="-dynamiclib -flat_namespace -undefined suppress -noprebind"
+      LDFLAGS="${LDFLAGS} ${LIB_SPECS}"
+      CFLAGS="${CFLAGS} ${X_CFLAGS} ${INC_SPECS} -I/sw/include -fno-common"
       ;;
 
     *cygwin*)
-      AC_DEFINE(CYGWIN)
       SHDLIB_EXT=".dll"
-      LDDL_FLAGS="-shared -Wl,--enable-auto-image-base -Wl,-rpath,${loader_run_path}"
-      SHLIB_LIB_SPECS="${LIB_SPECS}"
+      AC_DEFINE(CYGWIN)
+      AC_DEFINE(USE_DL_IMPORT)
+      LDDL_FLAGS='-shared -Wl,--enable-auto-image-base'
+      if test "x${loader_run_path}" != "x" ; then
+	LD_RUN_PATH="${LD_RUN_PATH} -Wl,-rpath,${loader_run_path}"
+      fi
+      ld_extra_libs=${LIB_SPECS}
       ;;
 
     *-bsdi4*)
@@ -1025,19 +1039,12 @@ AC_SUBST(TCLFTDI_LIB_DIR)
 
     *-linux*)
       SHLIB_CFLAGS="-fPIC"
-      SHLIB_LD="${CC}"
       LDDL_FLAGS='-shared -Wl,-soname,$@'
-      LD_RUN_PATH="-Wl,-rpath,${loader_run_path}"
-    
+      if test "x${loader_run_path}" != "x" ; then
+	LD_RUN_PATH="${LD_RUN_PATH} -Wl,-rpath,${loader_run_path}"
+      fi
+      LDFLAGS=""
       EXTRA_LIB_SPECS="-ldl"
-
-      case $target in
-	 x86_64-*)
-	    # AMD 64-bit archictecture
-	    # Add -fPIC to standard compile switch
-	    CFLAGS="${CFLAGS} -fPIC"
-	    ;;
-      esac
       ;;
   
     *-netbsd*|*-freebsd*|*-openbsd*)
@@ -1068,29 +1075,37 @@ AC_SUBST(TCLFTDI_LIB_DIR)
 # compiler.
 
   if test "$GCC" = "yes" ; then
-    CFLAGS="-fPIC ${CFLAGS}"
+    case $target in
+      *cygwin*)
+	;;
+      *)
+	SHLIB_CFLAGS="-fPIC"
+	;;
+    esac
   fi
-  if test "${xc_with_gnu_ld}" = "yes" ; then
+  if test "${with_gnu_ld}" = "yes" ; then
     LDDL_FLAGS="${LDDL_FLAGS} -Wl,--version-script=symbol.map"
   fi
  
   AC_SUBST(SHDLIB_EXT)
   AC_SUBST(SHLIB_LD)
+  AC_SUBST(LD)
   AC_SUBST(LDDL_FLAGS)
   AC_SUBST(SHLIB_LIB_SPECS)
+
   AC_SUBST(EXTRA_LIB_SPECS)
-  AC_SUBST(LD_RUN_PATH)
   AC_SUBST(LDFLAGS)
-  AC_SUBST(TCL_LIB_DIR)
+  AC_SUBST(INC_SPECS)
+  AC_SUBST(LIB_SPECS)
+  AC_SUBST(LIB_SPECS_NOSTUB)
   AC_SUBST(WISH_EXE)
+  AC_SUBST(TCL_LIB_DIR)
 
 fi
 
-AC_SUBST(INC_SPECS)
-AC_SUBST(LIB_SPECS)
 AC_SUBST(CFLAGS)
+AC_SUBST(SHLIB_CFLAGS)
 AC_SUBST(LDFLAGS)
-AC_SUBST(LD)
 AC_SUBST(STDLIBS)
 AC_SUBST(INSTALL)
 AC_SUBST(INSTALL_DATA)

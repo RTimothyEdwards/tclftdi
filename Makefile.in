@@ -10,9 +10,8 @@ LIBS = @LIBS@
 LDFLAGS = @LDFLAGS@
 INSTALL = @INSTALL@
 SHDLIB_EXT = @SHDLIB_EXT@
-# SHLIB_CFLAGS = @SHLIB_CFLAGS@
+SHLIB_CFLAGS = @SHLIB_CFLAGS@
 LDDL_FLAGS = @LDDL_FLAGS@
-# EXTRA_LIBS = @EXTRA_LIBS@
 EXTRA_LIB_SPECS = @EXTRA_LIB_SPECS@
 VERSION = @VERSION@
 INSTALL = @INSTALL@
@@ -26,6 +25,7 @@ TCLFTDI_BIN_DIR = @TCLFTDI_BIN_DIR@
 WISH_EXE = @WISH_EXE@
 
 LIB_SPECS = @LIB_SPECS@
+LIB_SPECS_NOSTUB = @LIB_SPECS_NOSTUB@
 INC_SPECS = @INC_SPECS@
 
 FTDI_OBJS = ftdi_tcl.o gpib_tcl.o gpib_driver.o gpib_controller.o
@@ -60,29 +60,29 @@ $(WRAPPER_INIT): $(WRAPPER_INIT).in
 
 tclftdi${SHDLIB_EXT}: ${FTDI_OBJS} symbol.map
 	$(RM) tclftdi${SHDLIB_EXT}
-	$(CC) ${CFLAGS} ${SHLIB_CFLAGS} -o $@ ${LDDL_FLAGS} ${FTDI_OBJS} \
+	$(CC) ${CFLAGS} -o $@ ${LDDL_FLAGS} ${FTDI_OBJS} \
 		${SHLIB_LIB_SPECS} ${LDFLAGS} ${EXTRA_LIBS} ${LIBS} \
 		${LIB_SPECS} ${EXTRA_LIB_SPECS}
 
 ftdi_tcl.o: ftdi_tcl.c d2xx_tcl.c
 	$(RM) ftdi_tcl.o
-	$(CC) ${CPPFLAGS} ${CFLAGS} ${DEFS} ${FTDIDEFS} $(PATHNAMES) $(INCLUDES) \
-		$(INC_SPECS) ftdi_tcl.c -c -o ftdi_tcl.o
+	$(CC) ${CPPFLAGS} ${CFLAGS} ${SHLIB_CFLAGS} ${DEFS} ${FTDIDEFS} $(PATHNAMES) \
+		$(INCLUDES) $(INC_SPECS) ftdi_tcl.c -c -o ftdi_tcl.o
 
 gpib_controller.o: gpib_controller.c gpib_driver.h
 	$(RM) gpib_controller.o
-	$(CC) ${CPPFLAGS} ${CFLAGS} ${DEFS} ${GPIBDEFS} $(PATHNAMES) $(INCLUDES) \
-		$(INC_SPECS) gpib_controller.c -c -o gpib_controller.o
+	$(CC) ${CPPFLAGS} ${CFLAGS} ${SHLIB_CFLAGS} ${DEFS} ${GPIBDEFS} $(PATHNAMES) \
+		$(INCLUDES) $(INC_SPECS) gpib_controller.c -c -o gpib_controller.o
 
 gpib_driver.o: gpib_driver.c gpib_driver.h
 	$(RM) gpib_driver.o
-	$(CC) ${CPPFLAGS} ${CFLAGS} ${DEFS} ${GPIBDEFS} $(PATHNAMES) $(INCLUDES) \
-		$(INC_SPECS) gpib_driver.c -c -o gpib_driver.o
+	$(CC) ${CPPFLAGS} ${CFLAGS} ${SHLIB_CFLAGS} ${DEFS} ${GPIBDEFS} $(PATHNAMES) \
+		$(INCLUDES) $(INC_SPECS) gpib_driver.c -c -o gpib_driver.o
 
 gpib_tcl.o: gpib_tcl.c
 	$(RM) gpib_tcl.o
-	$(CC) ${CPPFLAGS} ${CFLAGS} ${DEFS} ${GPIBDEFS} $(PATHNAMES) $(INCLUDES) \
-		$(INC_SPECS) gpib_tcl.c -c -o gpib_tcl.o
+	$(CC) ${CPPFLAGS} ${CFLAGS} ${SHLIB_CFLAGS} ${DEFS} ${GPIBDEFS} $(PATHNAMES) \
+		$(INCLUDES) $(INC_SPECS) gpib_tcl.c -c -o gpib_tcl.o
 
 install:
 	$(MKDIR) $(DESTDIR)$(TCLFTDI_LIB_DIR)
