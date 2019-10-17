@@ -43,15 +43,20 @@ proc popnamespace { name } {
 
 set auto_noexec 1	;# don't EVER call UNIX commands w/o "shell" in front
 
-set FtdiConsole tkcon
-wm withdraw .
+if {![catch {wm withdraw .}]} {
+   set FtdiConsole tkcon
+} else {
+   set FtdiConsole {}
+}
 
 # Allow commands in the ftdi namespace to be called from the toplevel namespace
 
 pushnamespace ftdi
 
-if {[string range [wm title .] 0 3] == "wish"} {
-   wm withdraw .
+if {$FtdiConsole != {}} {
+   if {[string range [wm title .] 0 3] == "wish"} {
+      wm withdraw .
+   }
 }
 
 #----------------------------------
