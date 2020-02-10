@@ -683,7 +683,7 @@ ftditcl_bang_write(ClientData clientData,
    // Write command/register word msb first
    for (j = cmdwidth - 1; j >= 0; j--) {
       // input changes on falling edge of SCK
-      tbuffer[tidx++] = (regnum & (1 << j)) ? sigpins[BB_SDI] : 0;
+      tbuffer[tidx++] = (regnum & ((Tcl_WideInt)1 << j)) ? sigpins[BB_SDI] : 0;
       tbuffer[tidx] = tbuffer[tidx - 1] | sigpins[BB_SCK];
       tidx++;
    }
@@ -900,7 +900,7 @@ ftditcl_bang_read(ClientData clientData,
    // Write command/register word msb first
    for (j = cmdwidth - 1; j >= 0; j--) {
       // input changes on falling edge of SCK
-      tbuffer[tidx++] = (regnum & (1 << j)) ? sigpins[BB_SDI] : 0;
+      tbuffer[tidx++] = (regnum & ((Tcl_WideInt)1 << j)) ? sigpins[BB_SDI] : 0;
       tbuffer[tidx] = tbuffer[tidx - 1] | sigpins[BB_SCK];
       tidx++;
    }
