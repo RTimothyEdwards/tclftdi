@@ -1245,7 +1245,6 @@ ftditcl_spi_read(ClientData clientData,
    // Number bytes to read (less one)
    tbuffer[1] = (unsigned char)((bytecount - 1) & 0xff);
    tbuffer[2] = (unsigned char)(((bytecount - 1) >> 8) & 0xff);
- 
    tbuffer[3] = 0x80;	// Set Dbus
    tbuffer[4] = (flags & CS_INVERT) ? 0x00 : 0x08; // De-assert CS
    tbuffer[5] = 0x0b;	// SCK, SDI, and CS are outputs
@@ -1277,6 +1276,7 @@ ftditcl_spi_read(ClientData clientData,
    for (i = 0; i < bytecount; i++) {
       Tcl_ListObjAppendElement(interp, vector, Tcl_NewIntObj((int)values[i]));
    }
+
    Tcl_SetObjResult(interp, vector);
    free(values);
    return TCL_OK;
