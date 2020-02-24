@@ -1159,7 +1159,7 @@ ftditcl_spi_read(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
    int result;
-   int bytecount, i;
+   int bytecount, i, j;
    int cmdcount;
    Tcl_WideInt regnum;
    unsigned char *values;
@@ -1199,18 +1199,22 @@ ftditcl_spi_read(ClientData clientData,
    // Write values to MPSSE to generate the SPI read command
 
    tbuffer[0] = 0x80;        // Set Dbus
-   tbuffer[1] = (flags & CS_INVERT) ? 0x00 : 0x08; // Assert CS
-   tbuffer[2] = 0x0b;        // SCK, SDI, and CS are outputs
+   tbuffer[1] = (flags & CS_INVERT) ? 0x08 : 0x00; // Assert CS
+   tbuffer[2] = 0x0b;     // SCK, SDI, and CS are outputs
    tbuffer[3] = 0x11;     // Simple write command
-   tbuffer[4] = 0x00;     // Length = 1;
+   cmdcount = ftRecord->cmdwidth >> 3;
+   if (flags & LEGACY_MODE)
+      tbuffer[4] = 0x00;     // Length = 1;
+   else
+      tbuffer[4] = (unsigned char)(cmdcount - 1);
    tbuffer[5] = 0x00;     // (High byte is zero)
    // Command to send is "read register" + register no.
-   cmdcount = ftRecord->cmdwidth >> 3;
    if (flags & LEGACY_MODE)
       tbuffer[6] = ((flags & MIXED_MODE) ? 0x20 : 0x80) + (unsigned char)regnum;
    else {
       for (i = 0; i < cmdcount; i++) {
-	 tbuffer[6 + i] = (unsigned char)((regnum >> (i << 3)) & 0xff);
+	 j = cmdcount - i - 1;
+	 tbuffer[6 + i] = (unsigned char)((regnum >> (j << 3)) & 0xff);
       }
    }
 
@@ -1239,11 +1243,10 @@ ftditcl_spi_read(ClientData clientData,
 
    tbuffer[0] = (flags & MIXED_MODE) ? 0x24 : 0x20;     // Simple read command
    // Number bytes to read (less one)
-   tbuffer[1] = (unsigned char)(bytecount - 1);
-   tbuffer[2] = 0x00;     // (High byte is zero)
- 
+   tbuffer[1] = (unsigned char)((bytecount - 1) & 0xff);
+   tbuffer[2] = (unsigned char)(((bytecount - 1) >> 8) & 0xff);
    tbuffer[3] = 0x80;	// Set Dbus
-   tbuffer[4] = (flags & CS_INVERT) ? 0x08 : 0x00; // De-assert CS
+   tbuffer[4] = (flags & CS_INVERT) ? 0x00 : 0x08; // De-assert CS
    tbuffer[5] = 0x0b;	// SCK, SDI, and CS are outputs
 
    if (verbose > 1) {
@@ -1273,6 +1276,7 @@ ftditcl_spi_read(ClientData clientData,
    for (i = 0; i < bytecount; i++) {
       Tcl_ListObjAppendElement(interp, vector, Tcl_NewIntObj((int)values[i]));
    }
+
    Tcl_SetObjResult(interp, vector);
    free(values);
    return TCL_OK;
@@ -1287,8 +1291,8 @@ ftditcl_spi_write(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
    int result;
-   int bytecount, i, value;
-   int cmdcount;
+   int bytecount, i, j, value;
+   int cmdcount, allcount;
    Tcl_WideInt regnum;
    unsigned char *values;
    unsigned char flags;
@@ -1339,19 +1343,21 @@ ftditcl_spi_write(ClientData clientData,
    values = (unsigned char *)malloc((6 + cmdcount + bytecount) * sizeof(unsigned char));
 
    values[0] = 0x80;        // Set Dbus
-   values[1] = (flags & CS_INVERT) ? 0x00 : 0x08; // Assert CS
+   values[1] = (flags & CS_INVERT) ? 0x08 : 0x00; // Assert CS
    values[2] = 0x0b;        // SCK, SDI, and CS are outputs
 
    values[3] = 0x11;        // Simple write command
    // Number of bytes to write (less 1)
-   values[4] = (unsigned char)bytecount;
-   values[5] = 0x00;        // (High byte is zero)
+   allcount = bytecount + cmdcount - 1;
+   values[4] = (unsigned char)(allcount & 0xff);
+   values[5] = (unsigned char)((allcount >> 8) & 0xff);
    if (flags & LEGACY_MODE)
       // Command to send is "write register" + register no.
       values[6] = ((flags & MIXED_MODE) ? 0x10 : 0x40) + (unsigned char)regnum;
    else {
       for (i = 0; i < cmdcount; i++) {
-	 values[6 + i] = (unsigned char)((regnum >> (i << 3)) & 0xff);
+	 j = cmdcount - i - 1;
+	 values[6 + i] = (unsigned char)((regnum >> (j << 3)) & 0xff);
       }
    }
 
@@ -1388,7 +1394,7 @@ ftditcl_spi_write(ClientData clientData,
       Tcl_SetResult(interp, "SPI short write error.\n", NULL);
 
    values[0] = 0x80;        // Set Dbus
-   values[1] = (flags & CS_INVERT) ? 0x08 : 0x00; // De-assert CS
+   values[1] = (flags & CS_INVERT) ? 0x00 : 0x08; // De-assert CS
    values[2] = 0x0b;        // SCK, SDI, and CS are outputs
 
    if (verbose > 1) {
@@ -1421,7 +1427,7 @@ ftditcl_spi_readwrite(ClientData clientData,
 	Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
 {
    int result;
-   int bytecount, i;
+   int bytecount, i, j;
    int cmdcount;
    Tcl_WideInt regnum;
    Tcl_Obj *lobj;
@@ -1474,18 +1480,22 @@ ftditcl_spi_readwrite(ClientData clientData,
    // Write values to MPSSE to generate the SPI read command
 
    values[0] = 0x80;        // Set Dbus
-   values[1] = (flags & CS_INVERT) ? 0x00 : 0x08; // Assert CS
+   values[1] = (flags & CS_INVERT) ? 0x08 : 0x00; // Assert CS
    values[2] = 0x0b;        // SCK, SDI, and CS are outputs
    values[3] = 0x11;     // Simple write command
-   values[4] = 0x00;     // Length = 1;
-   values[5] = 0x00;     // (High byte is zero)
    // Command to send is "read register" + register no.
    cmdcount = ftRecord->cmdwidth >> 3;
+   if (flags & LEGACY_MODE)
+      values[4] = 0x00;     // Length = 1;
+   else
+      values[4] = (unsigned char)(cmdcount - 1);
+   values[5] = 0x00;     // (High byte is zero)
    if (flags & LEGACY_MODE)
       values[6] = ((flags & MIXED_MODE) ? 0x20 : 0x80) + (unsigned char)regnum;
    else {
       for (i = 0; i < cmdcount; i++) {
-	 values[6 + i] = (unsigned char)((regnum >> (i << 3)) & 0xff);
+	 j = cmdcount - i - 1;
+	 values[6 + i] = (unsigned char)((regnum >> (j << 3)) & 0xff);
       }
    }
 
@@ -1506,11 +1516,11 @@ ftditcl_spi_readwrite(ClientData clientData,
 
    values[0] = (flags & MIXED_MODE) ? 0x24 : 0x20;     // Simple read command
    // Number bytes to read (less one)
-   values[1] = (unsigned char)(bytecount - 1);
-   values[2] = 0x00;     // (High byte is zero)
+   values[1] = (unsigned char)((bytecount - 1) && 0xff);
+   values[2] = (unsigned char)(((bytecount - 1) >> 8) & 0xff);
  
    values[3] = 0x80;	// Set Dbus
-   values[4] = (flags & CS_INVERT) ? 0x08 : 0x00; // De-assert CS
+   values[4] = (flags & CS_INVERT) ? 0x00 : 0x08; // De-assert CS
    values[5] = 0x0b;	// SCK, SDI, and CS are outputs
 
    if (verbose > 1) {
@@ -1839,7 +1849,7 @@ ftditcl_open(ClientData clientData,
          // MPSSE setup. . .
          tbuffer[0] = 0x80;        // Set Dbus
          // De-assert CS (initial value 0 if CS, 1 if CSB)
-         tbuffer[1] = (flags & CS_INVERT) ? 0x08 : 0x00;
+         tbuffer[1] = (flags & CS_INVERT) ? 0x00 : 0x08;
          tbuffer[2] = 0x0b;        // SCK, SDI, and CS are outputs
 
          tbuffer[3] = 0x82;        // Set Cbus (rotary switch)
@@ -1934,7 +1944,7 @@ ftditcl_open(ClientData clientData,
 
       // Assert CS line
       tbuffer[0] = 0x80;
-      tbuffer[1] = (ftRecordPtr->flags & CS_INVERT) ? 0x00 : 0x08;
+      tbuffer[1] = (ftRecordPtr->flags & CS_INVERT) ? 0x08 : 0x00;
       tbuffer[2] = 0x0b;
 
       if (verbose > 1) {
@@ -2020,7 +2030,7 @@ int close_device(Tcl_Interp *interp, char *devname)
    if (ftContext == (struct ftdi_context *)NULL) return TCL_ERROR;
 
    tbuffer[0] = 0x80;        // Set Dbus
-   tbuffer[1] = (flags & CS_INVERT) ? 0x08 : 0x00;
+   tbuffer[1] = (flags & CS_INVERT) ? 0x00 : 0x08;
    tbuffer[2] = 0x00;
    tbuffer[3] = 0x82;        // Set Cbus
    tbuffer[4] = 0x00;
